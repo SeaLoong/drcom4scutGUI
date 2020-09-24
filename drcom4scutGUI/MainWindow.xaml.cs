@@ -33,20 +33,31 @@ namespace drcom4scutGUI
             InitializeComponent();
         }
 
+        private void ShowAndActive()
+        {
+            this.Show();
+            this.WindowState = WindowState.Normal;
+            this.Activate();
+        }
+
         NotifyIcon notifyIcon;
         private void InitTray()
         {
-            SystemTrayParameter pars = new SystemTrayParameter(Resource1.DrClient, this.Title, null, 0, (object _, System.Windows.Forms.MouseEventArgs __) =>
+            SystemTrayParameter pars = new SystemTrayParameter(Resource1.DrClient, this.Title, null, 0)
             {
-                this.Show();
-                this.WindowState = WindowState.Normal;
-            });
+                Click = (object _, MouseEventArgs e) =>
+                {
+                    if (e.Button == MouseButtons.Left)
+                    {
+                        this.ShowAndActive();
+                    }
+                }
+            };
             List<SystemTrayMenu> ls = new List<SystemTrayMenu>
             {
                 new SystemTrayMenu("主界面", (_, __) =>
                 {
-                    this.Show();
-                    this.WindowState = WindowState.Normal;
+                    this.ShowAndActive();
                 }),
                 new SystemTrayMenu("退出", (_, __) =>
                 {
@@ -264,8 +275,7 @@ namespace drcom4scutGUI
             this.thread = null;
             this.success = false;
             SetUIEnabled(true);
-            this.Show();
-            this.WindowState = WindowState.Normal;
+            this.ShowAndActive();
             label.Content = "已断开！";
         }
 

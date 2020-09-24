@@ -32,7 +32,14 @@ namespace drcom4scutGUI
                 notifyIcon.BalloonTipText = pars.TipText; //设置系统托盘启动时显示的文本
                 notifyIcon.ShowBalloonTip(pars.Time == 0 ? 100 : pars.Time);//显示时长
             }
-            notifyIcon.MouseDoubleClick += pars.DbClick; //双击事件
+            if (pars.Click != null)
+            {
+                notifyIcon.MouseClick += pars.Click;
+            }
+            if (pars.DbClick != null)
+            {
+                notifyIcon.MouseDoubleClick += pars.DbClick;
+            }
             notifyIcon.ContextMenuStrip = GetMenuStrip(menuList);
             return notifyIcon;
         }
@@ -65,13 +72,12 @@ namespace drcom4scutGUI
     /// </summary>
     public class SystemTrayParameter
     {
-        public SystemTrayParameter(Icon Icon, string MinText, string TipText, int Time, MouseEventHandler dbClick)
+        public SystemTrayParameter(Icon Icon, string MinText, string TipText, int Time)
         {
             this.Icon = Icon;
             this.MinText = MinText;
             this.TipText = TipText;
             this.Time = Time;
-            this.DbClick = dbClick;
         }
         /// <summary>
         /// 托盘显示图标
@@ -89,6 +95,10 @@ namespace drcom4scutGUI
         /// 最小化启动时文本显示时长
         /// </summary>
         public int Time { get; set; }
+        /// <summary>
+        /// 最小化单击事件
+        /// </summary>
+        public MouseEventHandler Click { get; set; }
         /// <summary>
         /// 最小化双击事件
         /// </summary>
