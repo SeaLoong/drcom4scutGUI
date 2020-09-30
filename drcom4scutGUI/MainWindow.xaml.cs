@@ -89,6 +89,10 @@ namespace drcom4scutGUI
                     }
                 }
             }
+            if (this.mac != null && this.comboBox_MAC.SelectedIndex < 0)
+            {
+                this.comboBox_MAC.SelectedIndex = this.comboBox_MAC.Items.Add(this.mac);
+            }
         }
 
         private void InitUI()
@@ -181,21 +185,29 @@ namespace drcom4scutGUI
 
         private void Window_Loaded(object sender, RoutedEventArgs e)
         {
-            LoadConfig();
-            InitTray();
-            InitUI();
+            if (Process.GetProcessesByName(Process.GetCurrentProcess().ProcessName).Length > 1)
+            {
+                this.IsEnabled = false;
+                MessageBox.Show("程序已在运行！", "错误", MessageBoxButton.OK, MessageBoxImage.Error);
+                System.Windows.Application.Current.Shutdown(0);
+                return;
+            }
             GetCoreVersion();
             QuitPreviousCore();
             if (this.core == null)
             {
                 this.IsEnabled = false;
                 MessageBox.Show("未找到核心程序 drcom4scut.exe，无法使用！", "错误", MessageBoxButton.OK, MessageBoxImage.Error);
-                label.Content = "未找到核心程序 drcom4scut.exe，无法使用！";
+                System.Windows.Application.Current.Shutdown(0);
+                return;
             }
             else
             {
                 this.Title = "drcom4scutGUI -   core: " + this.core;
             }
+            LoadConfig();
+            InitTray();
+            InitUI();
             if (this.autoLogin)
             {
                 StartCoreProcess();
@@ -204,7 +216,10 @@ namespace drcom4scutGUI
 
         private void Window_Closing(object sender, System.ComponentModel.CancelEventArgs e)
         {
-            this.notifyIcon.Visible = false;
+            if (this.notifyIcon != null)
+            {
+                this.notifyIcon.Visible = false;
+            }
             try
             {
                 if (process != null) process.Kill();
@@ -317,9 +332,18 @@ namespace drcom4scutGUI
                     string s = match.Groups[1].Value;
                     if (this.success)
                     {
+                        if (s.Contains("ignore"))
+                        {
+                            return;
+                        }
+                        string text = "出现错误，但是保持核心程序运行。";
+                        if (s.Contains("Will try reconnect at the next"))
+                        {
+                            text = s;
+                        }
                         this.Dispatcher.BeginInvoke(new NoArgDelegate(() =>
                         {
-                            label.Content = "出现错误，但是保持连接。";
+                            label.Content = text;
                             this.notifyIcon.ShowBalloonTip(5000, "错误", s, ToolTipIcon.Error);
                         }));
                         return;
