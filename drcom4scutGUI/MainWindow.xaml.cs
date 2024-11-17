@@ -3,6 +3,7 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
+using System.Net;
 using System.Net.NetworkInformation;
 using System.Text;
 using System.Text.RegularExpressions;
@@ -20,6 +21,7 @@ namespace drcom4scutGUI
     {
         public const string FILE_PATH = "gui.json";
         private string mac = null;
+        private string ip = null;
         private string username = null;
         private string password = null;
         private bool autoLogin = false;
@@ -69,6 +71,8 @@ namespace drcom4scutGUI
 
         private void InitNetworkInterface()
         {
+            this.comboBox_MAC.Items.Add(String.Empty);
+            this.comboBox_IP.Items.Add(String.Empty);
             NetworkInterface[] nics = NetworkInterface.GetAllNetworkInterfaces();
             foreach (NetworkInterface adapter in nics)
             {
@@ -86,6 +90,26 @@ namespace drcom4scutGUI
                     if (this.mac != null && s == this.mac)
                     {
                         this.comboBox_MAC.SelectedIndex = id;
+                    }
+                    UnicastIPAddressInformationCollection addressInfoColl = adapter.GetIPProperties().UnicastAddresses;
+                    if (addressInfoColl.Count > 0)
+                    {
+                        foreach (UnicastIPAddressInformation addressInfo in addressInfoColl)
+                        {
+                            IPAddress address = addressInfo.Address;
+                            if (address.AddressFamily != System.Net.Sockets.AddressFamily.InterNetwork ||
+                                IPAddress.IsLoopback(address) ||
+                                (address.Address & 0x0000ffff) == (169l + (254l << 8)))
+                            {
+                                continue;
+                            }
+                            String ip = address.ToString();
+                            int ip_id = this.comboBox_IP.Items.Add(ip);
+                            if (this.ip != null && ip == this.ip)
+                            {
+                                this.comboBox_IP.SelectedIndex = ip_id;
+                            }
+                        }
                     }
                 }
             }
@@ -114,6 +138,11 @@ namespace drcom4scutGUI
                 {
                     this.mac = t.ToString().Trim();
                 }
+                t = o["ip"];
+                if (t != null)
+                {
+                    this.ip = t.ToString().Trim();
+                }
                 t = o["username"];
                 if (t != null)
                 {
@@ -140,6 +169,7 @@ namespace drcom4scutGUI
                 JObject o = new JObject
                 {
                     ["mac"] = this.mac,
+                    ["ip"] = this.ip,
                     ["username"] = this.username,
                     ["password"] = this.password,
                     ["autoLogin"] = this.autoLogin
@@ -246,6 +276,7 @@ namespace drcom4scutGUI
             this.button_login.Visibility = enable ? Visibility.Visible : Visibility.Hidden;
             this.button_logout.Visibility = !enable ? Visibility.Visible : Visibility.Hidden;
             this.comboBox_MAC.IsEnabled = enable;
+            this.comboBox_IP.IsEnabled = enable;
             this.textBox_username.IsEnabled = enable;
             this.passwordBox_password.IsEnabled = enable;
             this.checkBox_autoLogin.IsEnabled = enable;
@@ -254,6 +285,7 @@ namespace drcom4scutGUI
         private void Button_login_Click(object sender, RoutedEventArgs e)
         {
             this.mac = this.comboBox_MAC.Text;
+            this.ip = this.comboBox_IP.Text;
             this.username = this.textBox_username.Text;
             this.password = this.passwordBox_password.Password;
             this.autoLogin = this.checkBox_autoLogin.IsChecked.Value;
@@ -300,11 +332,21 @@ namespace drcom4scutGUI
             SetUIEnabled(false);
             Regex regexError = new Regex("\\[.*?\\]\\[ERROR]\\[.*?\\](.+)");
             StringBuilder sb = new StringBuilder();
+            StringBuilder argumentsSb = new StringBuilder();
+            if (!String.IsNullOrEmpty(this.mac))
+            {
+                argumentsSb.Append($"--mac \"{this.mac}\" ");
+            }
+            if (!String.IsNullOrEmpty(this.ip))
+            {
+                argumentsSb.Append($"--ip \"{this.ip}\" ");
+            }
+            argumentsSb.Append($"--username \"{this.username}\" --password \"{this.password}\"");
             thread = new Thread(new ThreadStart(() =>
             {
                 process = new Process
                 {
-                    StartInfo = new ProcessStartInfo("drcom4scut.exe", string.Format("--mac {0} --username {1} --password {2}", this.mac, this.username, this.password))
+                    StartInfo = new ProcessStartInfo("drcom4scut.exe", argumentsSb.ToString())
                     {
                         UseShellExecute = false,
                         CreateNoWindow = true,
