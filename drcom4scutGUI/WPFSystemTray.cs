@@ -11,7 +11,7 @@ namespace drcom4scutGUI
         /// 设置系统托盘
         /// </summary>
         /// <param name="pars">最小化参数</param>
-        /// <param name="dbClick"></param>
+        /// <param name="menuList"></param>
         /// <returns></returns>
         public static NotifyIcon SetSystemTray(SystemTrayParameter pars, List<SystemTrayMenu> menuList)
         {

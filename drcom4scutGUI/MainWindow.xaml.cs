@@ -97,26 +97,25 @@ namespace drcom4scutGUI
                         foreach (UnicastIPAddressInformation addressInfo in addressInfoColl)
                         {
                             IPAddress address = addressInfo.Address;
-                            if (address.AddressFamily != System.Net.Sockets.AddressFamily.InterNetwork ||
-                                IPAddress.IsLoopback(address) ||
-                                (address.Address & 0x0000ffff) == (169l + (254l << 8)))
+                            if (address.AddressFamily == System.Net.Sockets.AddressFamily.InterNetwork &&
+                                !IPAddress.IsLoopback(address) &&
+                                (address.Address & 0x0000ffff) != (169l + (254l << 8)))
                             {
-                                continue;
-                            }
-                            String ip = address.ToString();
-                            int ip_id = this.comboBox_IP.Items.Add(ip);
-                            if (this.ip != null && ip == this.ip)
-                            {
-                                this.comboBox_IP.SelectedIndex = ip_id;
+                                String ip = address.ToString();
+                                int ip_id = this.comboBox_IP.Items.Add(ip);
+                                if (this.ip != null && ip == this.ip)
+                                {
+                                    this.comboBox_IP.SelectedIndex = ip_id;
+                                }
                             }
                         }
                     }
                 }
             }
-            if (this.mac != null && this.comboBox_MAC.SelectedIndex < 0)
-            {
-                this.comboBox_MAC.SelectedIndex = this.comboBox_MAC.Items.Add(this.mac);
-            }
+            // if (this.mac != null && this.comboBox_MAC.SelectedIndex < 0)
+            // {
+            //     this.comboBox_MAC.SelectedIndex = this.comboBox_MAC.Items.Add(this.mac);
+            // }
         }
 
         private void InitUI()
