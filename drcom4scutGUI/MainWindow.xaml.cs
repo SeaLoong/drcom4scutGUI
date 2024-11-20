@@ -1,6 +1,5 @@
 ﻿using Newtonsoft.Json.Linq;
 using System;
-using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Net;
@@ -45,28 +44,18 @@ namespace drcom4scutGUI
         NotifyIcon notifyIcon;
         private void InitTray()
         {
-            SystemTrayParameter pars = new SystemTrayParameter(Resource1.DrClient, this.Title, null, 0)
+            ContextMenuStrip menuStrip = new ContextMenuStrip();
+            menuStrip.Items.Add(new ToolStripMenuItem("主界面", null, (sender, e) => { this.ShowAndActive(); }));
+            menuStrip.Items.Add(new ToolStripMenuItem("退出", null, (sender, e) => { this.Close(); }));
+
+            this.notifyIcon = new NotifyIcon()
             {
-                Click = (object _, MouseEventArgs e) =>
-                {
-                    if (e.Button == MouseButtons.Left)
-                    {
-                        this.ShowAndActive();
-                    }
-                }
+                ContextMenuStrip = menuStrip,
+                Icon = drcom4scutGUI.Resources.DrClient,
+                Text = this.Title,
+                Visible = true
             };
-            List<SystemTrayMenu> ls = new List<SystemTrayMenu>
-            {
-                new SystemTrayMenu("主界面", (_, __) =>
-                {
-                    this.ShowAndActive();
-                }),
-                new SystemTrayMenu("退出", (_, __) =>
-                {
-                    this.Close();
-                })
-            };
-            this.notifyIcon = WPFSystemTray.SetSystemTray(pars, ls);
+            notifyIcon.MouseClick += (sender, e) => { if (e.Button == MouseButtons.Left) { this.ShowAndActive(); }};
         }
 
         private void InitNetworkInterface()
@@ -83,7 +72,7 @@ namespace drcom4scutGUI
                     for (int i = 0; i < bs.Length; i++)
                     {
                         if (i > 0) sb.Append(":");
-                        sb.Append(string.Format("{0:x2}", bs[i]));
+                        sb.Append(bs[i].ToString("x2"));
                     }
                     string s = sb.ToString();
                     int id = this.comboBox_MAC.Items.Add(s);
@@ -112,10 +101,14 @@ namespace drcom4scutGUI
                     }
                 }
             }
-            // if (this.mac != null && this.comboBox_MAC.SelectedIndex < 0)
-            // {
-            //     this.comboBox_MAC.SelectedIndex = this.comboBox_MAC.Items.Add(this.mac);
-            // }
+            if (this.mac != null && this.comboBox_MAC.SelectedIndex < 0)
+            {
+                this.comboBox_MAC.SelectedIndex = this.comboBox_MAC.Items.Add(this.mac);
+            }
+            if (this.ip != null && this.comboBox_IP.SelectedIndex < 0)
+            {
+                this.comboBox_IP.SelectedIndex = this.comboBox_IP.Items.Add(this.ip);
+            }
         }
 
         private void InitUI()
@@ -214,13 +207,6 @@ namespace drcom4scutGUI
 
         private void Window_Loaded(object sender, RoutedEventArgs e)
         {
-            if (Process.GetProcessesByName(Process.GetCurrentProcess().ProcessName).Length > 1)
-            {
-                this.IsEnabled = false;
-                MessageBox.Show("程序已在运行！", "错误", MessageBoxButton.OK, MessageBoxImage.Error);
-                System.Windows.Application.Current.Shutdown(0);
-                return;
-            }
             GetCoreVersion();
             QuitPreviousCore();
             if (this.core == null)
@@ -407,7 +393,6 @@ namespace drcom4scutGUI
                 this.Dispatcher.BeginInvoke(new NoArgDelegate(this.QuitCoreProcess));
             }));
             thread.Start();
-
         }
     }
 }
