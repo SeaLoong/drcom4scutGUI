@@ -1,8 +1,8 @@
 ﻿using Newtonsoft.Json.Linq;
 using System;
-using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
+using System.Net;
 using System.Net.NetworkInformation;
 using System.Text;
 using System.Text.RegularExpressions;
@@ -20,6 +20,7 @@ namespace drcom4scutGUI
     {
         public const string FILE_PATH = "gui.json";
         private string mac = null;
+        private string ip = null;
         private string username = null;
         private string password = null;
         private bool autoLogin = false;
@@ -43,32 +44,24 @@ namespace drcom4scutGUI
         NotifyIcon notifyIcon;
         private void InitTray()
         {
-            SystemTrayParameter pars = new SystemTrayParameter(Resource1.DrClient, this.Title, null, 0)
+            ContextMenuStrip menuStrip = new ContextMenuStrip();
+            menuStrip.Items.Add(new ToolStripMenuItem("主界面", null, (sender, e) => { this.ShowAndActive(); }));
+            menuStrip.Items.Add(new ToolStripMenuItem("退出", null, (sender, e) => { this.Close(); }));
+
+            this.notifyIcon = new NotifyIcon()
             {
-                Click = (object _, MouseEventArgs e) =>
-                {
-                    if (e.Button == MouseButtons.Left)
-                    {
-                        this.ShowAndActive();
-                    }
-                }
+                ContextMenuStrip = menuStrip,
+                Icon = drcom4scutGUI.Resources.DrClient,
+                Text = this.Title,
+                Visible = true
             };
-            List<SystemTrayMenu> ls = new List<SystemTrayMenu>
-            {
-                new SystemTrayMenu("主界面", (_, __) =>
-                {
-                    this.ShowAndActive();
-                }),
-                new SystemTrayMenu("退出", (_, __) =>
-                {
-                    this.Close();
-                })
-            };
-            this.notifyIcon = WPFSystemTray.SetSystemTray(pars, ls);
+            notifyIcon.MouseClick += (sender, e) => { if (e.Button == MouseButtons.Left) { this.ShowAndActive(); }};
         }
 
         private void InitNetworkInterface()
         {
+            this.comboBox_MAC.Items.Add(String.Empty);
+            this.comboBox_IP.Items.Add(String.Empty);
             NetworkInterface[] nics = NetworkInterface.GetAllNetworkInterfaces();
             foreach (NetworkInterface adapter in nics)
             {
@@ -79,7 +72,7 @@ namespace drcom4scutGUI
                     for (int i = 0; i < bs.Length; i++)
                     {
                         if (i > 0) sb.Append(":");
-                        sb.Append(string.Format("{0:x2}", bs[i]));
+                        sb.Append(bs[i].ToString("x2"));
                     }
                     string s = sb.ToString();
                     int id = this.comboBox_MAC.Items.Add(s);
@@ -87,11 +80,34 @@ namespace drcom4scutGUI
                     {
                         this.comboBox_MAC.SelectedIndex = id;
                     }
+                    UnicastIPAddressInformationCollection addressInfoColl = adapter.GetIPProperties().UnicastAddresses;
+                    if (addressInfoColl.Count > 0)
+                    {
+                        foreach (UnicastIPAddressInformation addressInfo in addressInfoColl)
+                        {
+                            IPAddress address = addressInfo.Address;
+                            if (address.AddressFamily == System.Net.Sockets.AddressFamily.InterNetwork &&
+                                !IPAddress.IsLoopback(address) &&
+                                (address.Address & 0x0000ffff) != (169l + (254l << 8)))
+                            {
+                                String ip = address.ToString();
+                                int ip_id = this.comboBox_IP.Items.Add(ip);
+                                if (this.ip != null && ip == this.ip)
+                                {
+                                    this.comboBox_IP.SelectedIndex = ip_id;
+                                }
+                            }
+                        }
+                    }
                 }
             }
             if (this.mac != null && this.comboBox_MAC.SelectedIndex < 0)
             {
                 this.comboBox_MAC.SelectedIndex = this.comboBox_MAC.Items.Add(this.mac);
+            }
+            if (this.ip != null && this.comboBox_IP.SelectedIndex < 0)
+            {
+                this.comboBox_IP.SelectedIndex = this.comboBox_IP.Items.Add(this.ip);
             }
         }
 
@@ -113,6 +129,11 @@ namespace drcom4scutGUI
                 if (t != null)
                 {
                     this.mac = t.ToString().Trim();
+                }
+                t = o["ip"];
+                if (t != null)
+                {
+                    this.ip = t.ToString().Trim();
                 }
                 t = o["username"];
                 if (t != null)
@@ -140,6 +161,7 @@ namespace drcom4scutGUI
                 JObject o = new JObject
                 {
                     ["mac"] = this.mac,
+                    ["ip"] = this.ip,
                     ["username"] = this.username,
                     ["password"] = this.password,
                     ["autoLogin"] = this.autoLogin
@@ -185,13 +207,6 @@ namespace drcom4scutGUI
 
         private void Window_Loaded(object sender, RoutedEventArgs e)
         {
-            if (Process.GetProcessesByName(Process.GetCurrentProcess().ProcessName).Length > 1)
-            {
-                this.IsEnabled = false;
-                MessageBox.Show("程序已在运行！", "错误", MessageBoxButton.OK, MessageBoxImage.Error);
-                System.Windows.Application.Current.Shutdown(0);
-                return;
-            }
             GetCoreVersion();
             QuitPreviousCore();
             if (this.core == null)
@@ -246,6 +261,7 @@ namespace drcom4scutGUI
             this.button_login.Visibility = enable ? Visibility.Visible : Visibility.Hidden;
             this.button_logout.Visibility = !enable ? Visibility.Visible : Visibility.Hidden;
             this.comboBox_MAC.IsEnabled = enable;
+            this.comboBox_IP.IsEnabled = enable;
             this.textBox_username.IsEnabled = enable;
             this.passwordBox_password.IsEnabled = enable;
             this.checkBox_autoLogin.IsEnabled = enable;
@@ -254,6 +270,7 @@ namespace drcom4scutGUI
         private void Button_login_Click(object sender, RoutedEventArgs e)
         {
             this.mac = this.comboBox_MAC.Text;
+            this.ip = this.comboBox_IP.Text;
             this.username = this.textBox_username.Text;
             this.password = this.passwordBox_password.Password;
             this.autoLogin = this.checkBox_autoLogin.IsChecked.Value;
@@ -300,11 +317,21 @@ namespace drcom4scutGUI
             SetUIEnabled(false);
             Regex regexError = new Regex("\\[.*?\\]\\[ERROR]\\[.*?\\](.+)");
             StringBuilder sb = new StringBuilder();
+            StringBuilder argumentsSb = new StringBuilder();
+            if (!String.IsNullOrEmpty(this.mac))
+            {
+                argumentsSb.Append($"--mac \"{this.mac}\" ");
+            }
+            if (!String.IsNullOrEmpty(this.ip))
+            {
+                argumentsSb.Append($"--ip \"{this.ip}\" ");
+            }
+            argumentsSb.Append($"--username \"{this.username}\" --password \"{this.password}\"");
             thread = new Thread(new ThreadStart(() =>
             {
                 process = new Process
                 {
-                    StartInfo = new ProcessStartInfo("drcom4scut.exe", string.Format("--mac {0} --username {1} --password {2}", this.mac, this.username, this.password))
+                    StartInfo = new ProcessStartInfo("drcom4scut.exe", argumentsSb.ToString())
                     {
                         UseShellExecute = false,
                         CreateNoWindow = true,
@@ -366,7 +393,6 @@ namespace drcom4scutGUI
                 this.Dispatcher.BeginInvoke(new NoArgDelegate(this.QuitCoreProcess));
             }));
             thread.Start();
-
         }
     }
 }

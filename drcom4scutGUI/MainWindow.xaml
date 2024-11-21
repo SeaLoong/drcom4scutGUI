@@ -5,18 +5,19 @@
         xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
         xmlns:local="clr-namespace:drcom4scutGUI"
         mc:Ignorable="d"
-        Title="drcom4scutGUI" Height="334.709" Width="408.418" ResizeMode="CanMinimize" Closing="Window_Closing" Loaded="Window_Loaded" WindowStartupLocation="CenterScreen" StateChanged="Window_StateChanged" Icon="DrClient.ico">
+        Title="drcom4scutGUI" Height="360" Width="400" ResizeMode="CanMinimize" Closing="Window_Closing" Loaded="Window_Loaded" WindowStartupLocation="CenterScreen" StateChanged="Window_StateChanged" Icon="DrClient.ico">
     <Grid>
-        <TextBlock HorizontalAlignment="Left" Margin="34,33,0,0" TextWrapping="Wrap" Text="网卡MAC" VerticalAlignment="Top"/>
-        <ComboBox x:Name="comboBox_MAC" HorizontalAlignment="Left" Margin="100,24,0,0" VerticalAlignment="Top" Width="256" Height="24"/>
-        <TextBlock HorizontalAlignment="Left" Margin="62,76,0,0" TextWrapping="Wrap" Text="帐号" VerticalAlignment="Top"/>
-        <TextBox x:Name="textBox_username" HorizontalAlignment="Left" Height="24" Margin="100,67,0,0" TextWrapping="Wrap" VerticalAlignment="Top" Width="256"/>
-        <TextBlock HorizontalAlignment="Left" Margin="62,116,0,0" TextWrapping="Wrap" Text="密码" VerticalAlignment="Top"/>
-        <PasswordBox x:Name="passwordBox_password" HorizontalAlignment="Left" Height="23" Margin="100,108,0,0" VerticalAlignment="Top" Width="256" />
-        <Button x:Name="button_login" Content="登录" HorizontalAlignment="Left" Margin="222,157,0,0" VerticalAlignment="Top" Width="90" Height="39" Click="Button_login_Click"/>
-        <Button x:Name="button_logout" Content="断开" HorizontalAlignment="Left" Margin="222,157,0,0" VerticalAlignment="Top" Width="90" Height="39" Click="Button_logout_Click" Visibility="Hidden"/>
-        <CheckBox x:Name="checkBox_autoLogin" Content="自动登录" HorizontalAlignment="Left" Margin="113,170,0,0" VerticalAlignment="Top"/>
-        <Label x:Name="label" Content="1. 核心程序不能使用nolog版本。&#xD;&#xA;2. 登录失败提示中的重试将会被取消。&#xD;&#xA;3. 出现点登录后立即停止登录的话说明网卡选&#xD;&#xA;择不正确或配置文件出错。" Height="74" Margin="45,211,46,0" VerticalAlignment="Top"/>
-
+        <TextBlock Margin="0,32,310,0" HorizontalAlignment="Right" VerticalAlignment="Top" TextWrapping="Wrap" Text="网卡MAC"/>
+        <ComboBox x:Name="comboBox_MAC" Margin="110,28,0,0" Width="240" Height="24" HorizontalAlignment="Left" VerticalAlignment="Top"/>
+        <TextBlock Margin="0,72,310,0" HorizontalAlignment="Right" VerticalAlignment="Top" TextWrapping="Wrap" Text="网卡IP"/>
+        <ComboBox x:Name="comboBox_IP" Margin="110,68,0,0" Width="240" Height="24" HorizontalAlignment="Left" VerticalAlignment="Top"/>
+        <TextBlock Margin="0,112,310,0" HorizontalAlignment="Right" VerticalAlignment="Top" TextWrapping="Wrap" Text="帐号"/>
+        <TextBox x:Name="textBox_username" Margin="110,108,0,0" Width="240" Height="24" HorizontalAlignment="Left" VerticalAlignment="Top" TextWrapping="Wrap"/>
+        <TextBlock Margin="0,152,310,0" HorizontalAlignment="Right" VerticalAlignment="Top" TextWrapping="Wrap" Text="密码"/>
+        <PasswordBox x:Name="passwordBox_password" Margin="110,148,0,0" Width="240" Height="24" HorizontalAlignment="Left" VerticalAlignment="Top"/>
+        <CheckBox x:Name="checkBox_autoLogin" Margin="80,202,0,0" HorizontalAlignment="Left" VerticalAlignment="Top" Content="自动登录"/>
+        <Button x:Name="button_login" Margin="200,194,0,0" Width="80" Height="32" HorizontalAlignment="Left" VerticalAlignment="Top" Content="登录" Click="Button_login_Click"/>
+        <Button x:Name="button_logout" Margin="200,194,0,0" Width="80" Height="32" HorizontalAlignment="Left" VerticalAlignment="Top" Content="断开" Click="Button_logout_Click" Visibility="Hidden"/>
+        <Label x:Name="label" Margin="80,240,80,0" Height="70" VerticalAlignment="Top" Content="1. 核心程序不能使用nolog版本。&#xD;&#xA;2. 登录失败提示中的重试将会被取消。&#xD;&#xA;3. 出现登录后立即停止登录的情况&#xD;&#xA;    说明网卡选择错误或配置文件错误。"/>
     </Grid>
 </Window>
