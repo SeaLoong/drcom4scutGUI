@@ -5,19 +5,86 @@
         xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
         xmlns:local="clr-namespace:drcom4scutGUI"
         mc:Ignorable="d"
-        Title="drcom4scutGUI" Height="360" Width="400" ResizeMode="CanMinimize" Closing="Window_Closing" Loaded="Window_Loaded" WindowStartupLocation="CenterScreen" StateChanged="Window_StateChanged" Icon="DrClient.ico">
-    <Grid>
-        <TextBlock Margin="0,32,310,0" HorizontalAlignment="Right" VerticalAlignment="Top" TextWrapping="Wrap" Text="网卡MAC"/>
-        <ComboBox x:Name="comboBox_MAC" Margin="110,28,0,0" Width="240" Height="24" HorizontalAlignment="Left" VerticalAlignment="Top"/>
-        <TextBlock Margin="0,72,310,0" HorizontalAlignment="Right" VerticalAlignment="Top" TextWrapping="Wrap" Text="网卡IP"/>
-        <ComboBox x:Name="comboBox_IP" Margin="110,68,0,0" Width="240" Height="24" HorizontalAlignment="Left" VerticalAlignment="Top"/>
-        <TextBlock Margin="0,112,310,0" HorizontalAlignment="Right" VerticalAlignment="Top" TextWrapping="Wrap" Text="帐号"/>
-        <TextBox x:Name="textBox_username" Margin="110,108,0,0" Width="240" Height="24" HorizontalAlignment="Left" VerticalAlignment="Top" TextWrapping="Wrap"/>
-        <TextBlock Margin="0,152,310,0" HorizontalAlignment="Right" VerticalAlignment="Top" TextWrapping="Wrap" Text="密码"/>
-        <PasswordBox x:Name="passwordBox_password" Margin="110,148,0,0" Width="240" Height="24" HorizontalAlignment="Left" VerticalAlignment="Top"/>
-        <CheckBox x:Name="checkBox_autoLogin" Margin="80,202,0,0" HorizontalAlignment="Left" VerticalAlignment="Top" Content="自动登录"/>
-        <Button x:Name="button_login" Margin="200,194,0,0" Width="80" Height="32" HorizontalAlignment="Left" VerticalAlignment="Top" Content="登录" Click="Button_login_Click"/>
-        <Button x:Name="button_logout" Margin="200,194,0,0" Width="80" Height="32" HorizontalAlignment="Left" VerticalAlignment="Top" Content="断开" Click="Button_logout_Click" Visibility="Hidden"/>
-        <Label x:Name="label" Margin="80,240,80,0" Height="70" VerticalAlignment="Top" Content="1. 核心程序不能使用nolog版本。&#xD;&#xA;2. 登录失败提示中的重试将会被取消。&#xD;&#xA;3. 出现登录后立即停止登录的情况&#xD;&#xA;    说明网卡选择错误或配置文件错误。"/>
+        Title="drcom4scutGUI" SizeToContent="Height" Width="320" ResizeMode="CanMinimize"
+        Closing="Window_Closing" Loaded="Window_Loaded" WindowStartupLocation="CenterScreen" StateChanged="Window_StateChanged" Icon="DrClient.ico">
+
+    <Window.Resources>
+        <Style TargetType="Label" x:Key="LabelStyle">
+            <Setter Property="Margin" Value="0,0,5,0" />
+            <Setter Property="HorizontalContentAlignment" Value="Right" />
+            <Setter Property="VerticalContentAlignment" Value="Center" />
+        </Style>
+
+        <Style TargetType="Control" x:Key="ControlStyle">
+            <Setter Property="MinHeight" Value="24" />
+            <Setter Property="Margin" Value="0,5,0,5" />
+            <Setter Property="VerticalContentAlignment" Value="Center" />
+        </Style>
+
+        <Style TargetType="Button" x:Key="ButtonStyle">
+            <Setter Property="MinHeight" Value="32" />
+            <Setter Property="MinWidth" Value="64" />
+            <Setter Property="Padding" Value="10,0,10,0" />
+            <Setter Property="Margin" Value="10,0,10,0" />
+            <Setter Property="FontWeight" Value="Bold" />
+            <Setter Property="Foreground" Value="White" />
+        </Style>
+    </Window.Resources>
+
+    <Grid Margin="20,10,20,10">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+
+        <Grid>
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="Auto" />
+            </Grid.RowDefinitions>
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="*" />
+            </Grid.ColumnDefinitions>
+
+            <Label Grid.Row="0" Content="网卡(_N)" Target="{Binding ElementName=macComboBox}" Style="{StaticResource LabelStyle}" />
+            <ComboBox Grid.Row="0" Grid.Column="1" x:Name="macComboBox" SelectedValuePath="Tag" Style="{StaticResource ControlStyle}" />
+
+            <Label Grid.Row="1" Target="{Binding ElementName=nameComboBox}" Content="账号(_U)" Style="{StaticResource LabelStyle}" />
+            <Grid Grid.Row="1" Grid.Column="1">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+                <ComboBox x:Name="nameComboBox" IsEditable="True" IsTextSearchEnabled="False" Style="{StaticResource ControlStyle}" />
+                <Button Grid.Column="1" x:Name="deleteButton" Content="删除" IsEnabled="False" MinWidth="40" Padding="6,0,6,0" Margin="6,5,0,5" Click="DeleteButton_Click" />
+            </Grid>
+
+            <Label Grid.Row="2" Content="密码(_P)" Target="{Binding ElementName=passwordTextBox}" Style="{StaticResource LabelStyle}" />
+            <PasswordBox Grid.Row="2" Grid.Column="1" x:Name="passwordTextBox" Style="{StaticResource ControlStyle}" />
+
+            <Label Grid.Row="3" Content="_IP" Target="{Binding ElementName=ipTextBox}" Style="{StaticResource LabelStyle}" />
+            <TextBox Grid.Row="3" Grid.Column="1" x:Name="ipTextBox" Style="{StaticResource ControlStyle}" TextChanged="IpTextBox_TextChanged" />
+        </Grid>
+
+        <Grid Grid.Row="1" Margin="0,9,0,9">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+            <CheckBox x:Name="autoCheckBox" Content="自动认证(_A)" HorizontalAlignment="Center" VerticalAlignment="Center" />
+            <Button Grid.Column="1" x:Name="loginButton" Content="认证" IsDefault="True" Background="ForestGreen" Style="{StaticResource ButtonStyle}" Click="LoginButton_Click" />
+        </Grid>
+
+        <GroupBox Grid.Row="2" Header="备注">
+            <TextBlock x:Name="label" Padding="2" TextWrapping="Wrap">
+                1. 核心程序不能使用nolog版本。<LineBreak />
+                2. 认证失败提示中的重试将会被取消。<LineBreak />
+                3. 出现认证后立即停止认证的情况说明网卡选择错误或配置文件错误。
+            </TextBlock>
+        </GroupBox>
     </Grid>
 </Window>

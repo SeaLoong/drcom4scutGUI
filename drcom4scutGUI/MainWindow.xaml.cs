@@ -1,30 +1,23 @@
-﻿using Newtonsoft.Json.Linq;
-using System;
+﻿using System;
 using System.Diagnostics;
-using System.IO;
 using System.Net;
 using System.Net.NetworkInformation;
 using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading;
 using System.Windows;
+using System.Windows.Controls;
 using System.Windows.Forms;
 using MessageBox = System.Windows.MessageBox;
 
 namespace drcom4scutGUI
 {
-    /// <summary>
-    /// MainWindow.xaml 的交互逻辑
-    /// </summary>
     public partial class MainWindow : Window
     {
-        public const string FILE_PATH = "gui.json";
-        private string mac = null;
-        private string ip = null;
-        private string username = null;
-        private string password = null;
-        private bool autoLogin = false;
-        private string core = null;
+        private Configuration config = null;
+        private Account current = null;
+        private bool loading = false;
+        private string version = "";
         private Process process = null;
         private bool success = false;
         private Thread thread = null;
@@ -32,6 +25,8 @@ namespace drcom4scutGUI
         public MainWindow()
         {
             InitializeComponent();
+            System.ComponentModel.DependencyPropertyDescriptor.FromProperty(System.Windows.Controls.ComboBox.TextProperty, typeof(System.Windows.Controls.ComboBox))
+                .AddValueChanged(this.nameComboBox, NameComboBox_TextChanged);
         }
 
         private void ShowAndActive()
@@ -45,9 +40,8 @@ namespace drcom4scutGUI
         private void InitTray()
         {
             ContextMenuStrip menuStrip = new ContextMenuStrip();
-            menuStrip.Items.Add(new ToolStripMenuItem("主界面", null, (sender, e) => { this.ShowAndActive(); }));
+            menuStrip.Items.Add(new ToolStripMenuItem("主页", null, (sender, e) => { this.ShowAndActive(); }));
             menuStrip.Items.Add(new ToolStripMenuItem("退出", null, (sender, e) => { this.Close(); }));
-
             this.notifyIcon = new NotifyIcon()
             {
                 ContextMenuStrip = menuStrip,
@@ -55,139 +49,201 @@ namespace drcom4scutGUI
                 Text = this.Title,
                 Visible = true
             };
-            notifyIcon.MouseClick += (sender, e) => { if (e.Button == MouseButtons.Left) { this.ShowAndActive(); }};
+            notifyIcon.MouseClick += (sender, e) => { if (e.Button == MouseButtons.Left) { this.ShowAndActive(); } };
         }
 
         private void InitNetworkInterface()
         {
-            this.comboBox_MAC.Items.Add(String.Empty);
-            this.comboBox_IP.Items.Add(String.Empty);
+            this.macComboBox.Items.Add(new ComboBoxItem { Content = string.Empty, Tag = string.Empty });
             NetworkInterface[] nics = NetworkInterface.GetAllNetworkInterfaces();
             foreach (NetworkInterface adapter in nics)
             {
-                if (adapter.NetworkInterfaceType == NetworkInterfaceType.Ethernet)
+                if (adapter.NetworkInterfaceType != NetworkInterfaceType.Ethernet)
+                    continue;
+                string mac = BitConverter.ToString(adapter.GetPhysicalAddress().GetAddressBytes()).Replace('-', ':');
+                this.macComboBox.Items.Add(new ComboBoxItem
                 {
-                    byte[] bs = adapter.GetPhysicalAddress().GetAddressBytes();
-                    StringBuilder sb = new StringBuilder(20);
-                    for (int i = 0; i < bs.Length; i++)
-                    {
-                        if (i > 0) sb.Append(":");
-                        sb.Append(bs[i].ToString("x2"));
-                    }
-                    string s = sb.ToString();
-                    int id = this.comboBox_MAC.Items.Add(s);
-                    if (this.mac != null && s == this.mac)
-                    {
-                        this.comboBox_MAC.SelectedIndex = id;
-                    }
-                    UnicastIPAddressInformationCollection addressInfoColl = adapter.GetIPProperties().UnicastAddresses;
-                    if (addressInfoColl.Count > 0)
-                    {
-                        foreach (UnicastIPAddressInformation addressInfo in addressInfoColl)
-                        {
-                            IPAddress address = addressInfo.Address;
-                            if (address.AddressFamily == System.Net.Sockets.AddressFamily.InterNetwork &&
-                                !IPAddress.IsLoopback(address) &&
-                                (address.Address & 0x0000ffff) != (169l + (254l << 8)))
-                            {
-                                String ip = address.ToString();
-                                int ip_id = this.comboBox_IP.Items.Add(ip);
-                                if (this.ip != null && ip == this.ip)
-                                {
-                                    this.comboBox_IP.SelectedIndex = ip_id;
-                                }
-                            }
-                        }
-                    }
-                }
+                    Content = $"{adapter.Name} ({mac})",
+                    Tag = mac,
+                    ToolTip = adapter.Description
+                });
             }
-            if (this.mac != null && this.comboBox_MAC.SelectedIndex < 0)
+            this.macComboBox.SelectedValue = config.Mac;
+            if (this.macComboBox.SelectedIndex < 0)
             {
-                this.comboBox_MAC.SelectedIndex = this.comboBox_MAC.Items.Add(this.mac);
-            }
-            if (this.ip != null && this.comboBox_IP.SelectedIndex < 0)
-            {
-                this.comboBox_IP.SelectedIndex = this.comboBox_IP.Items.Add(this.ip);
+                this.macComboBox.SelectedIndex = this.macComboBox.Items.Add(
+                    new System.Windows.Controls.ComboBoxItem { Content = $"({config.Mac})", Tag = config.Mac });
             }
         }
 
         private void InitUI()
         {
             InitNetworkInterface();
-            this.textBox_username.Text = this.username;
-            this.passwordBox_password.Password = this.password;
-            this.checkBox_autoLogin.IsChecked = this.autoLogin;
+            loading = true;
+            foreach (Account account in config.Accounts)
+                this.nameComboBox.Items.Add(account.Name);
+            current = config.Find(config.Account);
+            this.nameComboBox.Text = current?.Name ?? "";
+            ShowAccount(current);
+            this.autoCheckBox.IsChecked = config.Auto;
+            loading = false;
         }
 
         private void LoadConfig()
         {
-            JObject o = null;
             try
             {
-                o = JObject.Parse(File.ReadAllText(FILE_PATH));
-                JToken t = o["mac"];
-                if (t != null)
+                config = Configuration.Load();
+            }
+            catch (Exception e)
+            {
+                config = new Configuration();
+                MessageBox.Show($"读取配置文件失败，将使用空配置！\n{Configuration.FilePath}\n{e.Message}",
+                    "警告", MessageBoxButton.OK, MessageBoxImage.Warning);
+            }
+        }
+
+        private void ShowAccount(Account account)
+        {
+            current = account;
+            this.deleteButton.IsEnabled = account != null;
+            this.passwordTextBox.Password = account?.Password ?? "";
+            this.ipTextBox.Text = account?.IP ?? "";
+        }
+
+        private void NameComboBox_TextChanged(object sender, EventArgs e)
+        {
+            string username = this.nameComboBox.Text.Trim();
+            if (loading)
+                return;
+            Account account = config.Find(username);
+            if (account != current)
+            {
+                if (current != null)
                 {
-                    this.mac = t.ToString().Trim();
+                    SaveInput();
                 }
-                t = o["ip"];
-                if (t != null)
+                ShowAccount(account);
+            }
+        }
+
+        private void DeleteButton_Click(object sender, RoutedEventArgs e)
+        {
+            if (current == null) return;
+            if (MessageBox.Show($"确定删除账号 {current.Name} 吗？", "删除账号", MessageBoxButton.YesNo, MessageBoxImage.Question) != MessageBoxResult.Yes)
+                return;
+            loading = true;
+            config.Accounts.Remove(current);
+            if (config.Account == current.Name)
+            {
+                config.Account = "";
+            }
+            this.nameComboBox.Items.Remove(current.Name);
+            this.nameComboBox.Text = "";
+            ShowAccount(null);
+            loading = false;
+            SaveConfig();
+        }
+
+        private void IpTextBox_TextChanged(object sender, System.Windows.Controls.TextChangedEventArgs e)
+        {
+            string ip = this.ipTextBox.Text.Trim();
+            if (ip.Length == 0 || IPAddress.TryParse(ip, out IPAddress ipaddress))
+            {
+                this.ipTextBox.ClearValue(System.Windows.Controls.Control.BackgroundProperty);
+                this.ipTextBox.ToolTip = null;
+            }
+            else
+            {
+                this.ipTextBox.Background = System.Windows.Media.Brushes.MistyRose;
+                this.ipTextBox.ToolTip = "IP地址格式不正确，不需要指定时请留空";
+            }
+        }
+
+        private void SaveInput(bool all = false)
+        {
+            bool changed = false;
+            string username = this.nameComboBox.Text.Trim();
+            string password = this.passwordTextBox.Password;
+            string ip = this.ipTextBox.Text.Trim();
+            if (ip.Length == 0)
+            {
+                ip = "";
+            }
+            else if (IPAddress.TryParse(ip, out IPAddress ipaddress))
+            {
+                ip = ipaddress.ToString();
+            }
+            else
+            {
+                ip = current?.IP ?? "";
+            }
+            if (current == null && username.Length > 0 && password.Length > 0)
+            {
+                changed = true;
+                current = new Account { Name = username, Password = password, IP = ip };
+                config.Accounts.Add(current);
+                config.Accounts.Sort();
+                this.nameComboBox.Items.Add(username);
+                this.deleteButton.IsEnabled = true;
+            }
+            else if (current != null && (current.Password != password || current.IP != ip))
+            {
+                changed = true;
+                current.Password = password;
+                current.IP = ip;
+            }
+            if (all)
+            {
+                string mac = (string)this.macComboBox.SelectedValue ?? "";
+                bool auto = this.autoCheckBox.IsChecked == true;
+                if (config.Mac != mac)
                 {
-                    this.ip = t.ToString().Trim();
+                    changed = true;
+                    config.Mac = mac;
                 }
-                t = o["username"];
-                if (t != null)
+                else if (config.Account != current.Name)
                 {
-                    this.username = t.ToString().Trim();
+                    changed = true;
+                    config.Account = current.Name;
                 }
-                t = o["password"];
-                if (t != null)
+                else if (config.Auto != auto)
                 {
-                    this.password = t.ToString().Trim();
-                }
-                t = o["autoLogin"];
-                if (t != null)
-                {
-                    this.autoLogin = (bool)t;
+                    changed = true;
+                    config.Auto = auto;
                 }
             }
-            catch (Exception) { }
+            if (changed)
+                SaveConfig();
         }
 
         private void SaveConfig()
         {
             try
             {
-                JObject o = new JObject
-                {
-                    ["mac"] = this.mac,
-                    ["ip"] = this.ip,
-                    ["username"] = this.username,
-                    ["password"] = this.password,
-                    ["autoLogin"] = this.autoLogin
-                };
-                File.WriteAllText(FILE_PATH, o.ToString());
+                config.Save();
             }
-            catch (Exception) { }
+            catch (Exception e)
+            {
+                MessageBox.Show($"保存配置文件失败！\n{Configuration.FilePath}\n{e.Message}",
+                    "错误", MessageBoxButton.OK, MessageBoxImage.Error);
+            }
         }
 
-        private void QuitPreviousCore()
+        private static void KillCoreProcess()
         {
-            foreach (Process p in Process.GetProcessesByName("drcom4scut.exe"))
+            foreach (Process process in Process.GetProcessesByName("drcom4scut"))
             {
-                try
-                {
-                    p.Kill();
-                }
+                try { process.Kill(); }
                 catch (Exception) { }
             }
         }
 
-        private void GetCoreVersion()
+        private static Process BuildCoreProcess(string arguments)
         {
-            Process process = new Process
+            return new Process
             {
-                StartInfo = new ProcessStartInfo("drcom4scut.exe", "--version")
+                StartInfo = new ProcessStartInfo("drcom4scut.exe", arguments)
                 {
                     UseShellExecute = false,
                     CreateNoWindow = true,
@@ -195,11 +251,16 @@ namespace drcom4scutGUI
                     RedirectStandardError = true
                 }
             };
+        }
+
+        private void GetCoreVersion()
+        {
+            Process process = BuildCoreProcess("--version");
+            Regex versionRegex = new(@"drcom4scut\s*(\d\S*)");
             try
             {
                 process.Start();
-                Regex regex = new Regex("drcom4scut\\s*(\\d\\S*)");
-                this.core = regex.Match(process.StandardOutput.ReadToEnd()).Groups[1].Value;
+                version = versionRegex.Match(process.StandardOutput.ReadToEnd()).Groups[1].Value;
                 process.WaitForExit();
             }
             catch (Exception) { }
@@ -208,8 +269,8 @@ namespace drcom4scutGUI
         private void Window_Loaded(object sender, RoutedEventArgs e)
         {
             GetCoreVersion();
-            QuitPreviousCore();
-            if (this.core == null)
+            KillCoreProcess();
+            if (version.Length == 0)
             {
                 this.IsEnabled = false;
                 MessageBox.Show("未找到核心程序 drcom4scut.exe，无法使用！", "错误", MessageBoxButton.OK, MessageBoxImage.Error);
@@ -218,33 +279,21 @@ namespace drcom4scutGUI
             }
             else
             {
-                this.Title = "drcom4scutGUI -   core: " + this.core;
+                this.Title = $"drcom4scutGUI ({version})";
             }
             LoadConfig();
             InitTray();
             InitUI();
-            if (this.autoLogin)
+            if (current != null && config.Auto)
             {
-                StartCoreProcess();
+                StartCore();
             }
         }
 
         private void Window_Closing(object sender, System.ComponentModel.CancelEventArgs e)
         {
-            if (this.notifyIcon != null)
-            {
-                this.notifyIcon.Visible = false;
-            }
-            try
-            {
-                if (process != null) process.Kill();
-            }
-            catch (Exception) { }
-            try
-            {
-                if (thread != null) thread.Abort();
-            }
-            catch (Exception) { }
+            this.notifyIcon?.Visible = false;
+            KillCoreProcessOwned();
         }
 
         private void Window_StateChanged(object sender, EventArgs e)
@@ -255,142 +304,138 @@ namespace drcom4scutGUI
             }
         }
 
-        private delegate void EnableUIDelegate(bool enable);
         private void SetUIEnabled(bool enable)
         {
-            this.button_login.Visibility = enable ? Visibility.Visible : Visibility.Hidden;
-            this.button_logout.Visibility = !enable ? Visibility.Visible : Visibility.Hidden;
-            this.comboBox_MAC.IsEnabled = enable;
-            this.comboBox_IP.IsEnabled = enable;
-            this.textBox_username.IsEnabled = enable;
-            this.passwordBox_password.IsEnabled = enable;
-            this.checkBox_autoLogin.IsEnabled = enable;
+            this.loginButton.Content = enable ? "认证" : "停止";
+            this.loginButton.Background = enable ? System.Windows.Media.Brushes.ForestGreen : System.Windows.Media.Brushes.OrangeRed;
+            this.macComboBox.IsEnabled = enable;
+            this.nameComboBox.IsEnabled = enable;
+            this.deleteButton.IsEnabled = enable && current != null;
+            this.passwordTextBox.IsEnabled = enable;
+            this.ipTextBox.IsEnabled = enable;
+            this.autoCheckBox.IsEnabled = enable;
         }
 
-        private void Button_login_Click(object sender, RoutedEventArgs e)
+        private void LoginButton_Click(object sender, RoutedEventArgs e)
         {
-            this.mac = this.comboBox_MAC.Text;
-            this.ip = this.comboBox_IP.Text;
-            this.username = this.textBox_username.Text;
-            this.password = this.passwordBox_password.Password;
-            this.autoLogin = this.checkBox_autoLogin.IsChecked.Value;
-            SaveConfig();
-            StartCoreProcess();
-        }
-
-        private void Button_logout_Click(object sender, RoutedEventArgs e)
-        {
-            QuitCoreProcess();
+            if (thread == null) StartCore();
+            else StopCore();
         }
 
         private delegate void NoArgDelegate();
-        private void OnSuccess()
+
+        private void KillCoreProcessOwned()
         {
-            label.Content = "登录成功！";
-            this.WindowState = WindowState.Minimized;
+            try { process?.Kill(); }
+            catch (Exception) { }
+            process = null;
+            try { thread?.Abort(); }
+            catch (Exception) { }
+            thread = null;
         }
 
-        private void QuitCoreProcess()
+        private void StopCore()
         {
-            label.Content = "正在断开...";
-            try
-            {
-                if (process != null) process.Kill();
-            }
-            catch (Exception) { }
-            this.process = null;
-            try
-            {
-                if (thread != null) thread.Abort();
-            }
-            catch (Exception) { }
-            this.thread = null;
+            this.label.Text = "正在停止...";
+            KillCoreProcessOwned();
+            this.label.Text = "已停止！";
             this.success = false;
             SetUIEnabled(true);
             this.ShowAndActive();
-            label.Content = "已断开！";
         }
 
-        private void StartCoreProcess()
+        private void StartCore()
         {
-            label.Content = "正在登录...";
+            if (this.nameComboBox.Text.Trim().Length == 0 || this.passwordTextBox.Password.Length == 0)
+            {
+                MessageBox.Show("请输入账号和密码！", "错误", MessageBoxButton.OK, MessageBoxImage.Error);
+                return;
+            }
+            string ip = this.ipTextBox.Text.Trim();
+            if (ip.Length > 0 && !IPAddress.TryParse(ip, out IPAddress ipaddress))
+            {
+                MessageBox.Show("IP地址格式不正确，不需要指定时请留空", "错误", MessageBoxButton.OK, MessageBoxImage.Error);
+                return;
+            }
+            SaveInput(true);
             SetUIEnabled(false);
-            Regex regexError = new Regex("\\[.*?\\]\\[ERROR]\\[.*?\\](.+)");
-            StringBuilder sb = new StringBuilder();
-            StringBuilder argumentsSb = new StringBuilder();
-            if (!String.IsNullOrEmpty(this.mac))
+            this.label.Text = "正在认证...";
+
+            StringBuilder arguments = new();
+            if (!string.IsNullOrEmpty(config.Mac))
             {
-                argumentsSb.Append($"--mac \"{this.mac}\" ");
+                arguments.Append($" --mac \"{config.Mac}\"");
             }
-            if (!String.IsNullOrEmpty(this.ip))
+            if (!string.IsNullOrEmpty(current.IP))
             {
-                argumentsSb.Append($"--ip \"{this.ip}\" ");
+                arguments.Append($" --ip \"{current.IP}\"");
             }
-            argumentsSb.Append($"--username \"{this.username}\" --password \"{this.password}\"");
+            arguments.Append($" --username \"{current.Name}\" --password \"{current.Password}\"");
+
             thread = new Thread(new ThreadStart(() =>
             {
-                process = new Process
-                {
-                    StartInfo = new ProcessStartInfo("drcom4scut.exe", argumentsSb.ToString())
-                    {
-                        UseShellExecute = false,
-                        CreateNoWindow = true,
-                        RedirectStandardOutput = true,
-                        RedirectStandardError = true
-                    }
-                };
+                process = BuildCoreProcess(arguments.ToString());
+
+                Regex errorRegex = new(@"\[.*?\]\[ERROR\]\[.*?\]\s?(.+)");
+                StringBuilder message = new();
                 process.OutputDataReceived += (sender, args) =>
                 {
                     string data = args.Data;
                     if (data == null) return;
                     if (data.Contains("panic"))
                     {
-                        MessageBox.Show(data, "PANIC");
-                        this.Dispatcher.BeginInvoke(new NoArgDelegate(this.QuitCoreProcess));
+                        this.Dispatcher.BeginInvoke(new NoArgDelegate(() =>
+                        {
+                            StopCore();
+                            this.label.Text = data;
+                            MessageBox.Show(data, "崩溃", MessageBoxButton.OK, MessageBoxImage.Error);
+                        }));
                         return;
                     }
                     if (data.Contains("802.1X Authorization success!"))
                     {
                         this.success = true;
-                        this.Dispatcher.BeginInvoke(new NoArgDelegate(this.OnSuccess));
-                    }
-                    Match match = regexError.Match(data);
-                    if (!match.Success) return;
-                    string s = match.Groups[1].Value;
-                    if (this.success)
-                    {
-                        if (s.Contains("ignore"))
-                        {
-                            return;
-                        }
-                        string text = "出现错误，但是保持核心程序运行。";
-                        if (s.Contains("Will try reconnect at the next"))
-                        {
-                            text = s;
-                        }
+                        message.Clear();
                         this.Dispatcher.BeginInvoke(new NoArgDelegate(() =>
                         {
-                            label.Content = text;
-                            this.notifyIcon.ShowBalloonTip(5000, "错误", s, ToolTipIcon.Error);
+                            this.label.Text = "认证成功！";
+                            this.WindowState = WindowState.Minimized;
+                        }));
+                    }
+
+                    string errorMsg = errorRegex.Match(data).Groups[1].Value;
+                    if (errorMsg.Length == 0) return;
+
+                    if (this.success)
+                    {
+                        if (errorMsg.Contains("ignored"))
+                            return;
+
+                        this.Dispatcher.BeginInvoke(new NoArgDelegate(() =>
+                        {
+                            this.label.Text = errorMsg.Contains("Will try reconnect at the next")
+                                ? errorMsg : "出现错误，但是保持核心程序运行。";
+                            ShowAndActive();
                         }));
                         return;
                     }
-                    sb.Append(s);
-                    sb.Append("\n");
-                    if (s.Contains("reconnect"))
+
+                    message.Append(errorMsg).Append('\n');
+                    if (errorMsg.Contains("reconnect"))
                     {
                         this.Dispatcher.BeginInvoke(new NoArgDelegate(() =>
                         {
-                            MessageBox.Show(sb.ToString(), "错误");
-                            label.Content = "登录失败！";
+                            StopCore();
+                            string text = "认证失败，已停止！\n" + message.ToString().TrimEnd();
+                            this.label.Text = text;
+                            MessageBox.Show(text, "错误", MessageBoxButton.OK, MessageBoxImage.Error);
                         }));
-                        this.Dispatcher.BeginInvoke(new NoArgDelegate(this.QuitCoreProcess));
                     }
                 };
                 process.Start();
                 process.BeginOutputReadLine();
                 process.WaitForExit();
-                this.Dispatcher.BeginInvoke(new NoArgDelegate(this.QuitCoreProcess));
+                this.Dispatcher.BeginInvoke(new NoArgDelegate(StopCore));
             }));
             thread.Start();
         }
