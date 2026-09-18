@@ -26,6 +26,25 @@ namespace drcom4scutGUI
     }
 
     [DataContract]
+    internal class LegacyConfiguration
+    {
+        [DataMember(Name = "mac")]
+        public string Mac { get; set; }
+
+        [DataMember(Name = "ip")]
+        public string IP { get; set; }
+
+        [DataMember(Name = "username")]
+        public string Username { get; set; }
+
+        [DataMember(Name = "password")]
+        public string Password { get; set; }
+
+        [DataMember(Name = "autoLogin")]
+        public bool AutoLogin { get; set; }
+    }
+
+    [DataContract]
     public class Configuration
     {
         public static readonly string FilePath = Path.ChangeExtension(
@@ -65,7 +84,10 @@ namespace drcom4scutGUI
 
         public static Configuration Load()
         {
-            if (!File.Exists(FilePath)) return new Configuration();
+            if (!File.Exists(FilePath))
+            {
+                return Migrate() ?? new Configuration();
+            }
             using MemoryStream stream = new(File.ReadAllBytes(FilePath));
             return Normalize((Configuration)serializer.ReadObject(stream) ?? new Configuration());
         }
@@ -78,6 +100,44 @@ namespace drcom4scutGUI
                 serializer.WriteObject(writer, this);
             }
             File.WriteAllBytes(FilePath, stream.ToArray());
+        }
+
+        private static readonly string LegacyFilePath = "gui.json";
+
+        private static readonly DataContractJsonSerializer legacySerializer = new(typeof(LegacyConfiguration));
+
+        private static Configuration Migrate()
+        {
+            if (!File.Exists(LegacyFilePath))
+                return null;
+            Configuration config = null;
+            try
+            {
+                using MemoryStream stream = new(File.ReadAllBytes(LegacyFilePath));
+                LegacyConfiguration legacy = (LegacyConfiguration)legacySerializer.ReadObject(stream);
+                if (legacy == null)
+                    return null;
+                config = new()
+                {
+                    Mac = legacy.Mac?.ToUpper() ?? "",
+                    Auto = legacy.AutoLogin,
+                };
+                string name = legacy.Username?.Trim();
+                if (!string.IsNullOrWhiteSpace(name))
+                {
+                    config.Accounts.Add(new Account
+                    {
+                        Name = name,
+                        Password = legacy.Password ?? "",
+                        IP = legacy.IP?.Trim() ?? "",
+                    });
+                    config.Account = name;
+                }
+                config = Normalize(config);
+                config.Save();
+            }
+            catch { }
+            return config;
         }
     }
 }
