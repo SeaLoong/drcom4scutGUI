@@ -197,19 +197,11 @@ namespace drcom4scutGUI
             {
                 string mac = (string)this.macComboBox.SelectedValue ?? "";
                 bool auto = this.autoCheckBox.IsChecked == true;
-                if (config.Mac != mac)
+                if (config.Mac != mac || config.Account != current.Name || config.Auto != auto)
                 {
                     changed = true;
                     config.Mac = mac;
-                }
-                else if (config.Account != current.Name)
-                {
-                    changed = true;
                     config.Account = current.Name;
-                }
-                else if (config.Auto != auto)
-                {
-                    changed = true;
                     config.Auto = auto;
                 }
             }
