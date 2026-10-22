@@ -12,7 +12,7 @@ import zipfile
 
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
-MINIMUM_CORE_VERSION = "0.4.0"
+MINIMUM_CORE_VERSION = "0.4.1"
 
 
 def version():
@@ -52,7 +52,10 @@ def package(publish, output):
         raise SystemExit("Publish output does not match the source version")
     # dotnet publish has no user data. Refuse to accidentally ship a hand-edited
     # deployment directory containing account/configuration files.
-    forbidden = {"gui.json", "drcom4scutgui.json", "config.yml", "config.yaml", "accounts.json"}
+    forbidden = {
+        "gui.json", "drcom4scutgui.json", "config.json", "accounts.json",
+        "config.yml", "config.yaml", "core.yml", "core.yaml",
+    }
     files = sorted(path for path in publish.rglob("*") if path.is_file())
     if any(path.name.lower() in forbidden or path.is_symlink() for path in files):
         raise SystemExit("Publish output contains user configuration or symbolic links")
@@ -74,6 +77,12 @@ def package(publish, output):
             target.write(path, f"{stem}/{path.relative_to(publish).as_posix()}")
         for name in ("README.md", "LICENSE"):
             target.write(ROOT / name, f"{stem}/{name}")
+        # README links must also work in an extracted release, without a checkout.
+        for path in sorted((ROOT / "docs").rglob("*")):
+            if path.is_file():
+                if path.is_symlink():
+                    raise SystemExit("Documentation contains symbolic links")
+                target.write(path, f"{stem}/{path.relative_to(ROOT).as_posix()}")
         target.writestr(f"{stem}/BUILD-INFO.json", json.dumps(metadata, indent=2) + "\n")
     digest = hashlib.sha256(archive.read_bytes()).hexdigest()
     archive.with_suffix(".zip.sha256").write_text(f"{digest}  {archive.name}\n", encoding="utf-8")

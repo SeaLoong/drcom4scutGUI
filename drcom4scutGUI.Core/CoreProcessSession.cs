@@ -3,8 +3,11 @@ using System.ComponentModel;
 using System.Diagnostics;
 using System.IO;
 using System.IO.Pipes;
+using System.Security.AccessControl;
+using System.Security.Principal;
 using System.Text;
 using System.Text.Json.Serialization;
+using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -14,6 +17,9 @@ public sealed record CoreLaunchOptions(string Username, [property: JsonIgnore] s
 {
     public override string ToString() => $"CoreLaunchOptions {{ Username = {Username}, Password = [redacted] }}";
 }
+
+/// <summary>A completed environment check can report unmet prerequisites.</summary>
+public sealed record CoreDoctorReport(string Report, bool PrerequisitesMet);
 
 /// <summary>
 /// Owns one child only. Passwords travel through its private redirected stdin,
@@ -49,14 +55,19 @@ public sealed class CoreProcessSession(string executable)
         return info;
     }
 
-    public async Task<int> RunAsync(CoreLaunchOptions options, Action<string> stdout, Action<string> stderr, CancellationToken cancellationToken)
+    public async Task<int> RunAsync(CoreLaunchOptions options, Action<string> stdout, Action<string> stderr, CancellationToken cancellationToken,
+        Action<CoreConnectionStatus>? connectionChanged = null)
     {
         cancellationToken.ThrowIfCancellationRequested();
         ProcessStartInfo start = CreateStartInfo(executable, options);
+        using PrivateStatusDirectory statusDirectory = new();
+        start.ArgumentList.Add("--status-file");
+        start.ArgumentList.Add(statusDirectory.StatusPath);
         string pipeName = "drcom4scut-" + Guid.NewGuid().ToString("N");
         start.ArgumentList.Add("--control-pipe");
         start.ArgumentList.Add(@"\\.\pipe\" + pipeName);
         using CancellationTokenSource controlLifetime = new();
+        using CancellationTokenSource statusLifetime = new();
         await using NamedPipeServerStream control = new(pipeName, PipeDirection.Out, 1,
             PipeTransmissionMode.Byte, PipeOptions.Asynchronous | PipeOptions.CurrentUserOnly);
         using Process process = new() { StartInfo = start };
@@ -66,6 +77,7 @@ public sealed class CoreProcessSession(string executable)
         // handle closes on GUI crash, so the core can log off instead of orphaning.
         Task output = DrainAsync(process.StandardOutput, stdout, options.Password);
         Task error = DrainAsync(process.StandardError, stderr, options.Password);
+        Task status = MonitorStatusAsync(statusDirectory.StatusPath, process.Id, options, connectionChanged, statusLifetime.Token);
         try
         {
             process.StandardInput.NewLine = "\n";
@@ -85,7 +97,10 @@ public sealed class CoreProcessSession(string executable)
             }
             finally
             {
+                statusLifetime.Cancel();
                 controlLifetime.Cancel();
+                try { await status.ConfigureAwait(false); }
+                catch (OperationCanceledException) when (statusLifetime.IsCancellationRequested) { }
                 try { await connection.ConfigureAwait(false); }
                 catch (OperationCanceledException) { }
                 catch (IOException) { }
@@ -116,15 +131,30 @@ public sealed class CoreProcessSession(string executable)
     /// <summary>Refuse old cores instead of falling back to plaintext arguments.</summary>
     public async Task<string> VerifyCoreAsync(CancellationToken cancellationToken)
     {
-        string help = await ProbeAsync("--help", cancellationToken).ConfigureAwait(false);
-        if (!help.Contains("--password-stdin", StringComparison.Ordinal) || !help.Contains("--control-pipe", StringComparison.Ordinal) || !help.Contains("--with-udp", StringComparison.Ordinal) || !help.Contains("--require-https-portal", StringComparison.Ordinal))
-            throw new InvalidOperationException("核心不支持所需的安全密码输入和生命周期控制。请将 drcom4scut 0.4.0 或更新版本放在 GUI 同目录，不会回退到命令行明文密码。");
-        return (await ProbeAsync("--version", cancellationToken).ConfigureAwait(false)).Trim();
+        string help = (await ProbeAsync("--help", cancellationToken).ConfigureAwait(false)).Output;
+        if (!help.Contains("--password-stdin", StringComparison.Ordinal) || !help.Contains("--control-pipe", StringComparison.Ordinal) || !help.Contains("--status-file", StringComparison.Ordinal) || !help.Contains("--with-udp", StringComparison.Ordinal) || !help.Contains("--require-https-portal", StringComparison.Ordinal))
+            throw new InvalidOperationException("核心不支持所需的安全密码输入、连接状态和生命周期控制。请将 drcom4scut 0.4.1 或更新版本放在 GUI 同目录，不会回退到命令行明文密码。");
+        string reported = (await ProbeAsync("--version", cancellationToken).ConfigureAwait(false)).Output.Trim();
+        Match release = Regex.Match(reported,
+            @"\Adrcom4scut (?<version>(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*))(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?\z",
+            RegexOptions.CultureInvariant);
+        if (!release.Success || !Version.TryParse(release.Groups["version"].Value, out Version? version) || version < new Version(0, 4, 1))
+            throw new InvalidOperationException("请使用 drcom4scut 0.4.1 或更新的正式版本；当前核心版本过旧或无法识别，认证尚未启动。");
+        return reported;
     }
 
-    public Task<string> DoctorAsync(CancellationToken cancellationToken) => ProbeAsync("--doctor", cancellationToken);
+    public async Task<CoreDoctorReport> DoctorAsync(CancellationToken cancellationToken)
+    {
+        ProbeResult result = await ProbeAsync("--doctor", cancellationToken).ConfigureAwait(false);
+        string report = result.Output.TrimEnd();
+        if (result.Error.Length > 0)
+            report += (report.Length > 0 ? Environment.NewLine : "") + result.Error.TrimEnd();
+        return new CoreDoctorReport(report, result.ExitCode == 0);
+    }
 
-    private async Task<string> ProbeAsync(string argument, CancellationToken cancellationToken)
+    private sealed record ProbeResult(int ExitCode, string Output, string Error);
+
+    private async Task<ProbeResult> ProbeAsync(string argument, CancellationToken cancellationToken)
     {
         using CancellationTokenSource deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         deadline.CancelAfter(TimeSpan.FromSeconds(10));
@@ -139,8 +169,9 @@ public sealed class CoreProcessSession(string executable)
             await process.WaitForExitAsync(deadline.Token).ConfigureAwait(false);
             string text = await output.ConfigureAwait(false);
             string errors = await error.ConfigureAwait(false);
-            if (process.ExitCode != 0) throw new InvalidOperationException("核心自检未成功，请检查版本、Npcap 安装和网卡权限。" + (argument == "--doctor" ? "\n" + errors : ""));
-            return text;
+            if (process.ExitCode != 0 && !(argument == "--doctor" && process.ExitCode == 1))
+                throw new InvalidOperationException("核心自检未成功，请检查版本、Npcap 安装和网卡权限。" + (argument == "--doctor" ? "\n" + errors : ""));
+            return new ProbeResult(process.ExitCode, text, errors);
         }
         finally
         {
@@ -176,7 +207,7 @@ public sealed class CoreProcessSession(string executable)
         }
         catch (Win32Exception)
         {
-            throw new InvalidOperationException("无法启动同目录的 drcom4scut.exe。请从可信的发布来源安装 0.4.0 或更新版本，并安装 Npcap。");
+            throw new InvalidOperationException("无法启动同目录的 drcom4scut.exe。请从可信的发布来源安装 0.4.1 或更新版本；有线认证需要安装 Npcap。");
         }
     }
 
@@ -187,6 +218,82 @@ public sealed class CoreProcessSession(string executable)
             // Even a misconfigured external core must not display the submitted
             // password in the GUI log or exported diagnostics.
             onLine(password.Length == 0 ? line : line.Replace(password, "[已隐藏]", StringComparison.Ordinal));
+        }
+    }
+
+    private static async Task MonitorStatusAsync(string path, int pid, CoreLaunchOptions options,
+        Action<CoreConnectionStatus>? changed, CancellationToken cancellationToken)
+    {
+        CoreConnectionStatus? previous = null;
+        while (true)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            CoreConnectionStatus? current = await ReadStatusAsync(path, pid, options, cancellationToken).ConfigureAwait(false);
+            if (current is not null && current != previous)
+            {
+                previous = current;
+                changed?.Invoke(current);
+            }
+            await Task.Delay(TimeSpan.FromMilliseconds(100), cancellationToken).ConfigureAwait(false);
+        }
+    }
+
+    private static async Task<CoreConnectionStatus?> ReadStatusAsync(string path, int pid, CoreLaunchOptions options, CancellationToken cancellationToken)
+    {
+        try
+        {
+            await using FileStream file = new(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete,
+                bufferSize: 4096, FileOptions.Asynchronous | FileOptions.SequentialScan);
+            if (file.Length is 0 or > AuthenticationStatus.MaximumStatusBytes) return null;
+            byte[] bytes = new byte[(int)file.Length];
+            await file.ReadExactlyAsync(bytes, cancellationToken).ConfigureAwait(false);
+            if (await file.ReadAsync(new byte[1], cancellationToken).ConfigureAwait(false) != 0) return null;
+            return AuthenticationStatus.Parse(bytes, pid, options.Mode, options.NoUdp);
+        }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+        {
+            // Atomic publication may briefly leave no file. A malformed or
+            // foreign session must never become an authentication success.
+            return null;
+        }
+    }
+
+    private sealed class PrivateStatusDirectory : IDisposable
+    {
+        private readonly DirectoryInfo directory;
+        public string StatusPath => Path.Combine(directory.FullName, "status.json");
+
+        public PrivateStatusDirectory()
+        {
+            directory = Directory.CreateTempSubdirectory("drcom4scut-gui-");
+            try
+            {
+                if (OperatingSystem.IsWindows())
+                {
+                    using WindowsIdentity identity = WindowsIdentity.GetCurrent();
+                    SecurityIdentifier user = identity.User
+                        ?? throw new InvalidOperationException("无法确定当前 Windows 用户。");
+                    DirectorySecurity security = new();
+                    security.SetOwner(user);
+                    security.SetAccessRuleProtection(isProtected: true, preserveInheritance: false);
+                    security.AddAccessRule(new FileSystemAccessRule(user, FileSystemRights.FullControl,
+                        InheritanceFlags.ContainerInherit | InheritanceFlags.ObjectInherit,
+                        PropagationFlags.None, AccessControlType.Allow));
+                    directory.SetAccessControl(security);
+                }
+                else File.SetUnixFileMode(directory.FullName, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+            }
+            catch
+            {
+                directory.Delete(recursive: true);
+                throw;
+            }
+        }
+
+        public void Dispose()
+        {
+            try { directory.Delete(recursive: true); }
+            catch (Exception error) when (error is IOException or UnauthorizedAccessException) { }
         }
     }
 

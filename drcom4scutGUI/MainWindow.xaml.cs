@@ -243,7 +243,8 @@ public partial class MainWindow : Window
         int generation = ++sessionGeneration;
         try
         {
-            sessionTask = core.RunAsync(options, line => ReceiveLine(line, options.Mode, options.NoUdp, generation), line => ReceiveLine(line, options.Mode, options.NoUdp, generation), authentication.Token);
+            sessionTask = core.RunAsync(options, line => ReceiveLine(line, generation), line => ReceiveLine(line, generation), authentication.Token,
+                state => ReceiveStatus(state, options.Mode, options.NoUdp, generation));
             int code = await sessionTask;
             label.Text = $"核心程序已退出（代码 {code}）。可使用“自检”查看环境。";
         }
@@ -259,7 +260,7 @@ public partial class MainWindow : Window
         }
     }
 
-    private void ReceiveLine(string line, string mode, bool eapOnly, int generation)
+    private void ReceiveLine(string line, int generation)
     {
         diagnostics.Add(line);
         Dispatcher.BeginInvoke(new Action(() =>
@@ -267,13 +268,26 @@ public partial class MainWindow : Window
             if (closing || generation != sessionGeneration || sessionTask is null) return;
             logTextBox.Text = diagnostics.Export(current?.Name ?? "", current?.Password ?? "");
             logTextBox.ScrollToEnd();
+        }));
+    }
+
+    private void ReceiveStatus(CoreConnectionStatus state, string mode, bool eapOnly, int generation)
+    {
+        Dispatcher.BeginInvoke(new Action(() =>
+        {
+            if (closing || generation != sessionGeneration || sessionTask is null) return;
             if (authentication?.IsCancellationRequested == true) return;
-            if (AuthenticationStatus.IsSuccessLine(mode, eapOnly, line)) MarkAuthenticated(mode, eapOnly);
-            else if (mode == "eap" && line.Contains("802.1X Authorization success!", StringComparison.Ordinal))
-                label.Text = "802.1X 已通过，正在建立 UDP 会话…";
-            else if (line.Contains("[ERROR]", StringComparison.Ordinal) || line.StartsWith("drcom4scut:", StringComparison.Ordinal))
+            if (state.IsOnline) MarkAuthenticated(mode, eapOnly);
+            else
             {
-                label.Text = "连接出现问题，核心程序将按配置重试。详情见日志。";
+                label.Text = state.Phase switch
+                {
+                    CoreConnectionPhase.WaitingInterface => "正在等待可用网卡和 IPv4 地址…",
+                    CoreConnectionPhase.EapAuthentication => "正在进行 802.1X 认证…",
+                    CoreConnectionPhase.UdpAuthentication => "802.1X 已通过，正在建立 UDP 会话…",
+                    CoreConnectionPhase.PortalAuthentication => "正在进行无线门户认证…",
+                    _ => "连接已断开，核心程序将按配置重试。详情见日志。"
+                };
                 if (authenticated) { authenticated = false; ShowAndActivate(); }
             }
         }));
@@ -318,10 +332,13 @@ public partial class MainWindow : Window
         doctorButton.IsEnabled = false;
         try
         {
-            string result = await core.DoctorAsync(lifetime.Token);
-            diagnostics.Add(result);
+            CoreDoctorReport result = await core.DoctorAsync(lifetime.Token);
+            string summary = result.PrerequisitesMet ? "自检通过。" : "自检已完成，部分运行条件尚未满足。";
+            diagnostics.Add(summary);
+            foreach (string line in result.Report.Split('\n')) diagnostics.Add(line.TrimEnd('\r'));
             logTextBox.Text = diagnostics.Export(current?.Name ?? "", current?.Password ?? "");
-            MessageBox.Show(result, "环境自检", MessageBoxButton.OK, MessageBoxImage.Information);
+            MessageBox.Show(summary + Environment.NewLine + result.Report, "环境自检", MessageBoxButton.OK,
+                result.PrerequisitesMet ? MessageBoxImage.Information : MessageBoxImage.Warning);
         }
         catch (OperationCanceledException) when (lifetime.IsCancellationRequested) { }
         catch (Exception error) { if (!closing) MessageBox.Show(error.Message, "自检失败", MessageBoxButton.OK, MessageBoxImage.Warning); }

@@ -15,8 +15,38 @@ public sealed class CoreProcessSessionTests
     public async Task CapabilityProbeAndDoctorNeedNoStoredCredential()
     {
         var session = new CoreProcessSession(Helper);
-        Assert.Equal("drcom4scut 0.4.0", await session.VerifyCoreAsync(TestContext.Current.CancellationToken));
-        Assert.Contains("no real capture opened", await session.DoctorAsync(TestContext.Current.CancellationToken));
+        Assert.Equal("drcom4scut 0.4.1", await session.VerifyCoreAsync(TestContext.Current.CancellationToken));
+        CoreDoctorReport report = await session.DoctorAsync(TestContext.Current.CancellationToken);
+        Assert.True(report.PrerequisitesMet);
+        Assert.Contains("no real capture opened", report.Report);
+    }
+
+    [Fact]
+    public async Task UnmetPrerequisitesPreserveBothDiagnosticStreams()
+    {
+        string fixture = Path.Combine(Path.GetDirectoryName(Helper)!, "DoctorUnavailable" + Guid.NewGuid().ToString("N") + (OperatingSystem.IsWindows() ? ".exe" : ""));
+        File.Copy(Helper, fixture);
+        try
+        {
+            CoreDoctorReport report = await new CoreProcessSession(fixture).DoctorAsync(TestContext.Current.CancellationToken);
+            Assert.False(report.PrerequisitesMet);
+            Assert.Contains("capture=unavailable", report.Report);
+            Assert.Contains("install capture support", report.Report);
+        }
+        finally { File.Delete(fixture); }
+    }
+
+    [Fact]
+    public async Task UnexpectedDiagnosticExitStillReportsFailure()
+    {
+        string fixture = Path.Combine(Path.GetDirectoryName(Helper)!, "DoctorFailure" + Guid.NewGuid().ToString("N") + (OperatingSystem.IsWindows() ? ".exe" : ""));
+        File.Copy(Helper, fixture);
+        try
+        {
+            var error = await Assert.ThrowsAsync<InvalidOperationException>(() => new CoreProcessSession(fixture).DoctorAsync(TestContext.Current.CancellationToken));
+            Assert.Contains("unexpected diagnostic failure", error.Message);
+        }
+        finally { File.Delete(fixture); }
     }
 
     [Fact]
@@ -27,10 +57,38 @@ public sealed class CoreProcessSessionTests
         try
         {
             var error = await Assert.ThrowsAsync<InvalidOperationException>(() => new CoreProcessSession(renamed).VerifyCoreAsync(TestContext.Current.CancellationToken));
-            Assert.Contains("0.4.0", error.Message);
+            Assert.Contains("0.4.1", error.Message);
             Assert.Contains("不会回退", error.Message);
         }
         finally { File.Delete(renamed); }
+    }
+
+    [Theory]
+    [InlineData("OldCore")]
+    [InlineData("PreviewCore")]
+    [InlineData("UnknownCore")]
+    public async Task CapabilityNamesAloneCannotOverrideTheSupportedReleaseVersion(string prefix)
+    {
+        string fixture = Path.Combine(Path.GetDirectoryName(Helper)!, prefix + Guid.NewGuid().ToString("N") + (OperatingSystem.IsWindows() ? ".exe" : ""));
+        File.Copy(Helper, fixture);
+        try
+        {
+            var error = await Assert.ThrowsAsync<InvalidOperationException>(() => new CoreProcessSession(fixture).VerifyCoreAsync(TestContext.Current.CancellationToken));
+            Assert.Contains("0.4.1", error.Message);
+        }
+        finally { File.Delete(fixture); }
+    }
+
+    [Fact]
+    public async Task SupportedNewerReleaseCanCarrySemverBuildMetadata()
+    {
+        string fixture = Path.Combine(Path.GetDirectoryName(Helper)!, "FutureCore" + Guid.NewGuid().ToString("N") + (OperatingSystem.IsWindows() ? ".exe" : ""));
+        File.Copy(Helper, fixture);
+        try
+        {
+            Assert.Equal("drcom4scut 1.2.3+release.build", await new CoreProcessSession(fixture).VerifyCoreAsync(TestContext.Current.CancellationToken));
+        }
+        finally { File.Delete(fixture); }
     }
 
     [Fact]

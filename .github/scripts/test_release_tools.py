@@ -33,8 +33,11 @@ class PackageTests(unittest.TestCase):
         (self.root / "Directory.Build.props").write_text(
             "<Project><PropertyGroup><Version>2.0.0</Version></PropertyGroup></Project>"
         )
-        (self.root / "README.md").write_text("Fixture instructions")
+        (self.root / "README.md").write_text("[Usage](docs/usage.md)")
         (self.root / "LICENSE").write_text("Fixture license")
+        (self.root / "docs").mkdir()
+        (self.root / "docs/usage.md").write_text("Offline usage instructions")
+        (self.root / "docs/security.md").write_text("Password storage instructions")
         for name in ("drcom4scutGUI.exe", "drcom4scutGUI.dll", "coreclr.dll", "hostfxr.dll", "PresentationFramework.dll"):
             (self.publish / name).write_bytes(b"fixture-publish-file")
         (self.publish / "drcom4scutGUI.runtimeconfig.json").write_text("{}")
@@ -60,15 +63,20 @@ class PackageTests(unittest.TestCase):
             prefix = "drcom4scutGUI-2.0.0-win-x64/"
             self.assertIn(prefix + "README.md", package.namelist())
             self.assertIn(prefix + "LICENSE", package.namelist())
+            self.assertEqual(package.read(prefix + "docs/usage.md"), b"Offline usage instructions")
+            self.assertEqual(package.read(prefix + "docs/security.md"), b"Password storage instructions")
             metadata = json.loads(package.read(prefix + "BUILD-INFO.json"))
         self.assertEqual(metadata["source_commit"], "a" * 40)
         self.assertFalse(metadata["source_dirty"])
-        self.assertEqual(metadata["minimum_core_version"], "0.4.0")
+        self.assertEqual(metadata["minimum_core_version"], "0.4.1")
         self.assertTrue(metadata["self_contained"])
         self.assertFalse(metadata["core_included"])
 
     def test_user_account_files_are_never_packaged(self):
-        for name in ("gui.json", "drcom4scutGUI.json", "accounts.json", "config.yml"):
+        for name in (
+            "gui.json", "drcom4scutGUI.json", "accounts.json", "config.json",
+            "config.yml", "config.yaml", "core.yml", "core.yaml", "Config.JSON",
+        ):
             with self.subTest(name=name):
                 path = self.publish / name
                 path.write_text('"private-password"')

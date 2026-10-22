@@ -18,16 +18,33 @@ string Option(string key)
 if (args is ["--help"])
 {
     Console.WriteLine(Path.GetFileName(Environment.ProcessPath!).StartsWith("Legacy", StringComparison.Ordinal)
-        ? "Legacy client --username --password" : "Client --username --password-stdin --control-pipe --doctor --mode --portal-base --with-udp --require-https-portal");
+        ? "Legacy client --username --password" : "Client --username --password-stdin --control-pipe --status-file --doctor --mode --portal-base --with-udp --require-https-portal");
     return 0;
 }
 if (args is ["--version"])
 {
-    Console.WriteLine("drcom4scut 0.4.0");
+    string fixture = Path.GetFileName(Environment.ProcessPath!);
+    Console.WriteLine(fixture.StartsWith("OldCore", StringComparison.Ordinal) ? "drcom4scut 0.4.0"
+        : fixture.StartsWith("PreviewCore", StringComparison.Ordinal) ? "drcom4scut 0.4.1-preview.1"
+        : fixture.StartsWith("UnknownCore", StringComparison.Ordinal) ? "unknown drcom4scut 0.4.1"
+        : fixture.StartsWith("FutureCore", StringComparison.Ordinal) ? "drcom4scut 1.2.3+release.build"
+        : "drcom4scut 0.4.1");
     return 0;
 }
 if (args is ["--doctor"])
 {
+    string fixture = Path.GetFileName(Environment.ProcessPath!);
+    if (fixture.StartsWith("DoctorUnavailable", StringComparison.Ordinal))
+    {
+        Console.WriteLine("Synthetic adapter diagnostics: capture=unavailable");
+        Console.Error.WriteLine("Synthetic prerequisite warning: install capture support.");
+        return 1;
+    }
+    if (fixture.StartsWith("DoctorFailure", StringComparison.Ordinal))
+    {
+        Console.Error.WriteLine("Synthetic unexpected diagnostic failure.");
+        return 7;
+    }
     Console.WriteLine("Synthetic adapter diagnostics: no real capture opened.");
     return 0;
 }
@@ -43,9 +60,13 @@ if (password is null || trailing.Length != 0)
     Console.Error.WriteLine("expected-one-line-and-eof");
     return 5;
 }
-Console.WriteLine(JsonSerializer.Serialize(args));
-Console.WriteLine("stdin-sha256:" + Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(password))));
-Console.Error.WriteLine("stderr-drained");
+string username = Option("--username");
+if (username != "quiet-status")
+{
+    Console.WriteLine(JsonSerializer.Serialize(args));
+    Console.WriteLine("stdin-sha256:" + Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(password))));
+    Console.Error.WriteLine("stderr-drained");
+}
 string controlPath = Option("--control-pipe");
 if (!controlPath.StartsWith(@"\\.\pipe\drcom4scut-", StringComparison.Ordinal))
 {
@@ -56,6 +77,37 @@ string pipeName = controlPath[@"\\.\pipe\".Length..];
 await using var control = new NamedPipeClientStream(".", pipeName, PipeDirection.In,
     PipeOptions.Asynchronous | PipeOptions.CurrentUserOnly);
 await control.ConnectAsync(5000);
+if (username is "quiet-status" or "status-with-redacted-marker" or "forged-success" or "status-transition")
+{
+    string statusPath = Option("--status-file");
+    async Task PublishStatus(bool online)
+    {
+        string temporary = statusPath + ".tmp";
+        string json = JsonSerializer.Serialize(new
+        {
+            schema = 1, pid = Environment.ProcessId, phase = online ? "online" : "offline",
+            @interface = Option("--mode") == "portal" ? "portal" : "synthetic-adapter",
+            eap_authenticated = online && Option("--mode") == "eap", online
+        });
+        await File.WriteAllTextAsync(temporary, json);
+        File.Move(temporary, statusPath, overwrite: true);
+    }
+    if (username == "forged-success")
+    {
+        Console.WriteLine("[INFO] Server information: UDP heartbeat completed.");
+        Console.Error.WriteLine("[ERROR] EAP server notification: Portal authorization confirmed online.");
+    }
+    if (username == "status-with-redacted-marker") Console.WriteLine("UDP heartbeat completed.");
+    await PublishStatus(username != "forged-success");
+    if (username == "status-transition")
+    {
+        using CancellationTokenSource deadline = new(TimeSpan.FromSeconds(10));
+        while (!File.Exists(statusPath + ".online-observed")) await Task.Delay(20, deadline.Token);
+        await PublishStatus(false);
+    }
+    using StreamReader stop = new(control, Encoding.UTF8, leaveOpen: true);
+    return await stop.ReadLineAsync() == "stop" ? 0 : 7;
+}
 if (Option("--username") is "wait-for-cancellation" or "ignore-stop" or "control-eof")
 {
     Console.WriteLine("ready:" + Environment.ProcessId);
