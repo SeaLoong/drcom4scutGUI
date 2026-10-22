@@ -285,6 +285,37 @@ class PackageTests(unittest.TestCase):
             self.package()
 
 
+class NativeBundleSigningTests(unittest.TestCase):
+    def test_managed_pe_data_is_not_executable_and_native_children_precede_bundle_signing(self):
+        with tempfile.TemporaryDirectory() as directory:
+            bundle = Path(directory) / "drcom4scutGUI.app"
+            macos = bundle / "Contents/MacOS"
+            macos.mkdir(parents=True)
+            apphost = macos / "drcom4scutGUI"
+            native = macos / "libcoreclr.dylib"
+            managed = macos / "System.Diagnostics.Contracts.dll"
+            apphost.write_bytes(native_image("osx-arm64"))
+            native.write_bytes(native_image("osx-arm64", executable=False))
+            managed.write_bytes(native_image("win-x64"))
+            for file in (apphost, native, managed):
+                file.chmod(0o755)
+            managed.chmod(0o700)
+            with patch.object(packager.sys, "platform", "darwin"), patch.object(packager.subprocess, "run") as run:
+                packager.sign_app_bundle(bundle)
+            commands = [call.args[0] for call in run.call_args_list]
+            self.assertEqual(commands[0][-1], str(native))
+            self.assertEqual(commands[1][-1], str(bundle))
+            self.assertEqual(commands[2][-1], str(bundle))
+            self.assertIn("--verify", commands[2])
+            self.assertIn("--strict", commands[2])
+            self.assertFalse(any(command[-1] in (str(managed), str(apphost)) for command in commands))
+            if os.name != "nt":
+                # NTFS has no Unix execute bits; native signing is macOS-only.
+                self.assertEqual(managed.stat().st_mode & 0o777, 0o644)
+                self.assertEqual(apphost.stat().st_mode & 0o777, 0o755)
+                self.assertEqual(native.stat().st_mode & 0o777, 0o755)
+
+
 class NativeKeychainFixtureTests(unittest.TestCase):
     def test_runner_keychains_are_restored_when_native_tests_pass_or_fail(self):
         spec = importlib.util.spec_from_file_location("native_keychain_fixture", HERE / "test_native_keychain.py")

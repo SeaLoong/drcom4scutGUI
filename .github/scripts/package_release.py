@@ -94,15 +94,24 @@ def executable_relative(runtime):
 def sign_app_bundle(bundle):
     if sys.platform != "darwin":
         raise SystemExit("macOS packages must be assembled and signed on macOS")
-    # .NET ships native libraries beside its apphost, rather than as nested
-    # frameworks. Sign every Mach-O first, then seal and verify the app bundle.
+    # NuGet runtime assemblies can inherit execute bits. macOS interprets such
+    # managed PE/data files as nested code and refuses to seal the app bundle.
+    # Only true Mach-O images belong in its executable set.
     mach_o_magic = {b"\xcf\xfa\xed\xfe", b"\xfe\xed\xfa\xcf", b"\xca\xfe\xba\xbe", b"\xbe\xba\xfe\xca"}
-    for path in sorted(bundle.rglob("*")):
+    native_files = []
+    executable = bundle / "Contents/MacOS/drcom4scutGUI"
+    for path in sorted((bundle / "Contents/MacOS").rglob("*")):
         if path.is_file():
             with path.open("rb") as file:
                 native = file.read(4) in mach_o_magic
+            path.chmod(0o755 if native else 0o644)
             if native:
-                subprocess.run(["codesign", "--force", "--sign", "-", str(path)], check=True, timeout=120)
+                native_files.append(path)
+    for path in native_files:
+        # Signing the main apphost by itself implicitly signs its enclosing
+        # bundle. Leave it until all native children are signed and seal once.
+        if path != executable:
+            subprocess.run(["codesign", "--force", "--sign", "-", str(path)], check=True, timeout=120)
     subprocess.run(["codesign", "--force", "--deep", "--sign", "-", str(bundle)], check=True, timeout=120)
     subprocess.run(["codesign", "--verify", "--deep", "--strict", str(bundle)], check=True, timeout=60)
 
