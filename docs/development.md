@@ -25,7 +25,8 @@ dotnet restore drcom4scutGUI.sln --locked-mode
 dotnet build drcom4scutGUI/drcom4scutGUI.csproj --configuration Release --no-restore -warnaserror
 dotnet test --project drcom4scutGUI.Tests/drcom4scutGUI.Tests.csproj --configuration Release --no-restore --report-trx --results-directory artifacts/test-results/core
 dotnet test --project drcom4scutGUI.UiTests/drcom4scutGUI.UiTests.csproj --configuration Release --no-restore --report-trx --results-directory artifacts/test-results/ui
-python .github/scripts/check_test_results.py artifacts/test-results
+python .github/scripts/check_test_results.py artifacts/test-results/core
+python .github/scripts/check_test_results.py artifacts/test-results/ui
 python -B -m unittest discover -s .github/scripts -p 'test_*.py'
 ```
 
@@ -68,7 +69,7 @@ GUI 要求核心 0.5.0 或更新版本。Windows 查找 `drcom4scut.exe`，Unix 
 以下以原生 Linux x64 为例；在其他平台换成对应 RID 和输出目录。macOS `.app` 打包及签名检查应在 macOS 执行：
 
 ```sh
-dotnet restore drcom4scutGUI/drcom4scutGUI.csproj --runtime linux-x64 --locked-mode
+dotnet restore drcom4scutGUI/drcom4scutGUI.csproj --locked-mode
 dotnet publish drcom4scutGUI/drcom4scutGUI.csproj --configuration Release --runtime linux-x64 --self-contained true --no-restore --output artifacts/publish/linux-x64
 python .github/scripts/package_release.py --runtime linux-x64 --publish-dir artifacts/publish/linux-x64
 ```
