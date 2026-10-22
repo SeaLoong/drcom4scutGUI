@@ -112,6 +112,39 @@ public sealed class PlatformRuntimeTests
         Assert.Equal(adjacent, PlatformPaths.ResolveCoreExecutablePath(mac, false, true));
     }
 
+    [Fact]
+    public void MacResourcePayloadFindsItsSiblingCoreAndNativeLoginLauncher()
+    {
+        using var directory = new TemporaryDirectory();
+        string bundle = Path.Combine(directory.Path, "Campus Client.app");
+        string payload = Path.Combine(bundle, "Contents", "Resources", "publish");
+        string native = Path.Combine(bundle, "Contents", "MacOS");
+        Directory.CreateDirectory(payload);
+        Directory.CreateDirectory(native);
+        string apphost = Path.Combine(payload, "drcom4scutGUI");
+        string launcher = Path.Combine(native, "drcom4scutGUI");
+        File.WriteAllText(apphost, "managed apphost fixture");
+        File.WriteAllText(launcher, "native launcher fixture");
+        Assert.Equal(Path.Combine(payload, "drcom4scut"), PlatformPaths.ResolveCoreExecutablePath(payload, false, true));
+        string core = directory.File("drcom4scut");
+        File.WriteAllText(core, "adjacent core fixture");
+        Assert.Equal(core, PlatformPaths.ResolveCoreExecutablePath(payload, false, true));
+        Assert.Equal(launcher, PlatformPaths.ResolveGuiExecutablePath(payload, apphost, true));
+        Assert.Equal(launcher, PlatformPaths.ResolveGuiExecutablePath(native, launcher, true));
+        Assert.Equal(apphost, PlatformPaths.ResolveGuiExecutablePath(payload, apphost, false));
+        Assert.Equal(Path.Combine(payload, "drcom4scut"), PlatformPaths.ResolveCoreExecutablePath(payload, false, false));
+
+        // A directory merely containing an .app ancestor is not our installed
+        // Contents/Resources/publish or Contents/MacOS bundle layout.
+        string unrelated = Path.Combine(bundle, "Other", "publish");
+        Directory.CreateDirectory(unrelated);
+        Assert.Equal(Path.Combine(unrelated, "drcom4scut"), PlatformPaths.ResolveCoreExecutablePath(unrelated, false, true));
+        string ordinary = Path.Combine(directory.Path, "ordinary-app", "Contents", "Resources", "publish");
+        Directory.CreateDirectory(ordinary);
+        Assert.Equal(Path.Combine(ordinary, "drcom4scut"), PlatformPaths.ResolveCoreExecutablePath(ordinary, false, true));
+        Assert.Equal(apphost, PlatformPaths.ResolveGuiExecutablePath(unrelated, apphost, true));
+    }
+
     public static bool IsMacOS => OperatingSystem.IsMacOS();
 
     [Fact(SkipUnless = nameof(IsMacOS), Skip = "Native Keychain requires a macOS runner")]

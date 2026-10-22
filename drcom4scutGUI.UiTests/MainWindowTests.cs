@@ -61,6 +61,29 @@ public sealed class MainWindowTests
     }
 
     [Fact]
+    public void MacLoginStartupUsesTheBundleLauncherWithSpacesAsOneArgument()
+    {
+        string directory = Path.Combine(Path.GetTempPath(), "drcom-gui-startup-" + Guid.NewGuid().ToString("N"));
+        string bundle = Path.Combine(directory, "Campus & Network.app");
+        string payload = Path.Combine(bundle, "Contents", "Resources", "publish");
+        string native = Path.Combine(bundle, "Contents", "MacOS");
+        Directory.CreateDirectory(payload);
+        Directory.CreateDirectory(native);
+        try
+        {
+            string apphost = Path.Combine(payload, "drcom4scutGUI");
+            string launcher = Path.Combine(native, "drcom4scutGUI");
+            File.WriteAllText(apphost, "managed apphost fixture");
+            File.WriteAllText(launcher, "native launcher fixture");
+            string startup = PlatformPaths.ResolveGuiExecutablePath(payload, apphost, macOS: true);
+            Assert.Equal(launcher, startup);
+            XDocument document = XDocument.Parse(DesktopStartup.MacDefinition(startup));
+            Assert.Equal(launcher, document.Descendants("array").Single().Elements("string").Single().Value);
+        }
+        finally { Directory.Delete(directory, recursive: true); }
+    }
+
+    [Fact]
     public Task AllThreeModesKeepTheirProviderAndExposeOnlyRelevantFields() => OnUi(() =>
     {
         Configuration configuration = new();

@@ -22,7 +22,7 @@ internal static class DesktopStartup
 
     internal static void SetEnabled(bool enabled)
     {
-        string executable = Environment.ProcessPath ?? throw new InvalidOperationException("无法确定程序安装路径。");
+        string executable = PlatformPaths.GuiExecutablePath;
         if (OperatingSystem.IsWindows()) { SetWindowsEnabled(enabled, executable); return; }
         string path = StartupPath;
         if (!enabled) { File.Delete(path); return; }

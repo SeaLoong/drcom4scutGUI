@@ -74,7 +74,7 @@ dotnet publish drcom4scutGUI/drcom4scutGUI.csproj --configuration Release --runt
 python .github/scripts/package_release.py --runtime linux-x64 --publish-dir artifacts/publish/linux-x64
 ```
 
-每个归档含外层版本/RID 目录、README、`docs`、许可证、[第三方声明](../THIRD-PARTY-NOTICES.md)、`BUILD-INFO.json` 和自包含程序，不包含 Rust 核心或用户配置。Windows 使用 ZIP，Linux/macOS 使用 tar.gz；macOS 的 `.app/Contents/MacOS` 放置自包含程序及其原生依赖，`.app/Contents/Resources` 另保留文档、许可和来源信息。其 `Info.plist` 声明应用版本和系统要求，使用 ad-hoc 签名并检查完整性，不宣称 Developer ID 签名或 Apple 公证。
+每个归档含外层版本/RID 目录、README、`docs`、许可证、[第三方声明](../THIRD-PARTY-NOTICES.md)、`BUILD-INFO.json` 和自包含程序，不包含 Rust 核心或用户配置。Windows 使用 ZIP，Linux/macOS 使用 tar.gz；macOS 的 `.app/Contents/MacOS` 仅放置原生启动程序，自包含 .NET 程序及其依赖保存在 `.app/Contents/Resources/publish`，`Resources` 还保留文档、许可和来源信息。其 `Info.plist` 声明应用版本和系统要求，使用 ad-hoc 签名并在归档解包后验证原生文件签名及整个应用的完整性，不宣称 Developer ID 签名或 Apple 公证。
 
 平台清单驱动 ABI、PE/ELF/Mach-O 架构、源版本、发布 runtime 和所需文件检查，拒绝错误架构、缺失运行时、账号配置或符号链接。版本由 `Directory.Build.props` 统一声明；元数据记录完整源码 SHA 和工作区状态。本地脏工作区的包不当作干净提交的正式发布。
 

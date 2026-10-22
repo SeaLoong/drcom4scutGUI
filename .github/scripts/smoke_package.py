@@ -27,8 +27,7 @@ def smoke(runtime):
                 package.extractall(directory, filter="data")
         executable = Path(directory) / stem / packager.executable_relative(runtime)
         if runtime.startswith("osx-"):
-            subprocess.run(["codesign", "--verify", "--deep", "--strict", str(Path(directory) / stem / "drcom4scutGUI.app")],
-                           check=True, timeout=60)
+            packager.verify_app_bundle(Path(directory) / stem / "drcom4scutGUI.app")
         subprocess.run([str(executable), "--smoke-test"], cwd=executable.parent, check=True, timeout=45)
 
 

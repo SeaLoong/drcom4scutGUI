@@ -91,22 +91,54 @@ def executable_relative(runtime):
     return executable_name(runtime)
 
 
+def payload_relative(runtime):
+    if runtime.startswith("osx-"):
+        return "drcom4scutGUI.app/Contents/Resources/publish/drcom4scutGUI"
+    return executable_relative(runtime)
+
+
+def build_macos_launcher(bundle, runtime):
+    if sys.platform != "darwin":
+        raise SystemExit("macOS packages must be assembled and signed on macOS")
+    executable = bundle / "Contents/MacOS/drcom4scutGUI"
+    executable.parent.mkdir(parents=True)
+    architecture = "arm64" if runtime == "osx-arm64" else "x86_64"
+    subprocess.run([
+        "clang", "-arch", architecture, "-mmacosx-version-min=15.0", "-O2", "-Wall", "-Wextra", "-Werror",
+        str(Path(__file__).with_name("macos_launcher.c")), "-o", str(executable),
+    ], check=True, timeout=120)
+    verify_abi(executable.read_bytes(), PLATFORMS[runtime])
+
+
+def native_bundle_files(bundle):
+    magic = {b"\xcf\xfa\xed\xfe", b"\xfe\xed\xfa\xcf", b"\xca\xfe\xba\xbe", b"\xbe\xba\xfe\xca"}
+    for path in sorted((bundle / "Contents").rglob("*")):
+        if path.is_file():
+            with path.open("rb") as file:
+                if file.read(4) in magic:
+                    yield path
+
+
+def verify_app_bundle(bundle):
+    # Resources are sealed by the outer bundle. Also verify the embedded Mach-O
+    # signatures themselves, including after an archive has dropped all xattrs.
+    for path in native_bundle_files(bundle):
+        subprocess.run(["codesign", "--verify", "--strict", str(path)], check=True, timeout=60)
+    subprocess.run(["codesign", "--verify", "--deep", "--strict", str(bundle)], check=True, timeout=60)
+
+
 def sign_app_bundle(bundle):
     if sys.platform != "darwin":
         raise SystemExit("macOS packages must be assembled and signed on macOS")
-    # NuGet runtime assemblies can inherit execute bits. macOS interprets such
-    # managed PE/data files as nested code and refuses to seal the app bundle.
-    # Only true Mach-O images belong in its executable set.
-    mach_o_magic = {b"\xcf\xfa\xed\xfe", b"\xfe\xed\xfa\xcf", b"\xca\xfe\xba\xbe", b"\xbe\xba\xfe\xca"}
-    native_files = []
+    # Managed PE files are resources, never signed through nonportable xattrs.
+    # Contents/MacOS contains only the native launcher; the unmodified .NET file
+    # layout lives in Resources/publish so hostfxr and native probing still work.
+    native_files = list(native_bundle_files(bundle))
+    native_set = set(native_files)
     executable = bundle / "Contents/MacOS/drcom4scutGUI"
-    for path in sorted((bundle / "Contents/MacOS").rglob("*")):
+    for path in sorted((bundle / "Contents").rglob("*")):
         if path.is_file():
-            with path.open("rb") as file:
-                native = file.read(4) in mach_o_magic
-            path.chmod(0o755 if native else 0o644)
-            if native:
-                native_files.append(path)
+            path.chmod(0o755 if path in native_set else 0o644)
     for path in native_files:
         # Signing the main apphost by itself implicitly signs its enclosing
         # bundle. Leave it until all native children are signed and seal once.
@@ -116,7 +148,7 @@ def sign_app_bundle(bundle):
     # also signs managed PE assemblies through extended attributes, which a
     # portable tar archive cannot preserve. Deep verification remains required.
     subprocess.run(["codesign", "--force", "--sign", "-", str(bundle)], check=True, timeout=120)
-    subprocess.run(["codesign", "--verify", "--deep", "--strict", str(bundle)], check=True, timeout=60)
+    verify_app_bundle(bundle)
 
 
 def package(publish, output, runtime="win-x64"):
@@ -159,7 +191,7 @@ def package(publish, output, runtime="win-x64"):
         contents.mkdir()
         if runtime.startswith("osx-"):
             bundle = contents / "drcom4scutGUI.app"
-            destination = bundle / "Contents/MacOS"
+            destination = bundle / "Contents/Resources/publish"
         else:
             bundle = None
             destination = contents
@@ -177,7 +209,7 @@ def package(publish, output, runtime="win-x64"):
             # Keep notices and provenance with the app when a user moves only
             # the .app bundle, while retaining the archive's normal docs entry.
             resources = bundle / "Contents/Resources"
-            resources.mkdir()
+            resources.mkdir(exist_ok=True)
             for name in ("README.md", "LICENSE", "THIRD-PARTY-NOTICES.md", "BUILD-INFO.json"):
                 if (contents / name).is_file():
                     shutil.copy2(contents / name, resources / name)
@@ -191,6 +223,7 @@ def package(publish, output, runtime="win-x64"):
                 "NSHighResolutionCapable": True,
             }
             (bundle / "Contents/Info.plist").write_bytes(plistlib.dumps(info))
+            build_macos_launcher(bundle, runtime)
             sign_app_bundle(bundle)
         if platform["archive"] == "zip":
             with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_DEFLATED) as target:
@@ -202,7 +235,7 @@ def package(publish, output, runtime="win-x64"):
                 def executable_mode(member):
                     # NTFS cannot represent Unix execute bits when publishing
                     # another RID. The apphost must still be runnable on extract.
-                    if member.name == f"{stem}/{executable_relative(runtime)}":
+                    if member.name in {f"{stem}/{executable_relative(runtime)}", f"{stem}/{payload_relative(runtime)}"}:
                         member.mode = 0o755
                     return member
                 target.add(contents, arcname=stem, filter=executable_mode)

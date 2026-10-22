@@ -85,8 +85,9 @@ def verify(dist=None, source_commit=None, runtimes=None):
         if archive.with_suffix(archive.suffix + ".sha256").read_text(encoding="utf-8").strip() != line:
             raise SystemExit("GUI package checksum or filename mismatch")
         app_path = f"{stem}/{packager.executable_relative(runtime)}"
+        payload_path = f"{stem}/{packager.payload_relative(runtime)}"
         metadata_path = f"{stem}/BUILD-INFO.json"
-        members = read_members(archive, (metadata_path, app_path))
+        members = read_members(archive, (metadata_path, app_path, payload_path))
         try:
             metadata = json.loads(members[metadata_path])
         except (UnicodeError, json.JSONDecodeError) as error:
@@ -104,6 +105,8 @@ def verify(dist=None, source_commit=None, runtimes=None):
         if metadata.get("macos_signing") != ("ad-hoc" if runtime.startswith("osx-") else "none"):
             raise SystemExit("Unexpected GUI package signing metadata")
         packager.verify_abi(members[app_path], PLATFORMS[runtime])
+        if payload_path != app_path:
+            packager.verify_abi(members[payload_path], PLATFORMS[runtime])
         aggregate.append(line + "\n")
     (dist / "SHA256SUMS").write_text("".join(aggregate), encoding="utf-8")
     return [archive for _, _, archive in archives]
