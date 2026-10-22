@@ -13,6 +13,10 @@ internal static class DesktopInstance
         FileStreamOptions options = new() { Mode = FileMode.OpenOrCreate, Access = FileAccess.ReadWrite, Share = FileShare.None };
         if (!OperatingSystem.IsWindows()) options.UnixCreateMode = UnixFileMode.UserRead | UnixFileMode.UserWrite;
         try { return new FileStream(Path.Combine(directory, ".instance.lock"), options); }
-        catch (IOException error) when ((error.HResult & 0xffff) is 11 or 32 or 33) { return null; }
+        // FileStream reports Unix flock conflicts with the platform's errno:
+        // EWOULDBLOCK is 11 on Linux but 35 on Darwin. Keep unrelated I/O errors
+        // visible instead of treating an inaccessible lock as another instance.
+        catch (IOException error) when ((error.HResult & 0xffff) is 11 or 32 or 33
+            || OperatingSystem.IsMacOS() && (error.HResult & 0xffff) == 35) { return null; }
     }
 }

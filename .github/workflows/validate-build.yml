@@ -76,7 +76,9 @@ jobs:
         shell: bash
         run: python .github/scripts/check_test_results.py artifacts/ui-test-results
       - name: Restore the native desktop runtime from lock files
-        run: dotnet restore drcom4scutGUI/drcom4scutGUI.csproj --runtime ${{ matrix.runtime }} --locked-mode
+        # The project declares all six RIDs. Passing --runtime here replaces
+        # that locked set and incorrectly applies a RID to the portable core.
+        run: dotnet restore drcom4scutGUI/drcom4scutGUI.csproj --locked-mode
       - name: Publish self-contained native GUI
         run: dotnet publish drcom4scutGUI/drcom4scutGUI.csproj --configuration Release --runtime ${{ matrix.runtime }} --self-contained true --no-restore --output artifacts/publish/${{ matrix.runtime }} -warnaserror
       - name: Package native GUI and validate executable ABI
