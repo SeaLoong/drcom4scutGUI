@@ -12,54 +12,97 @@ env:
   DOTNET_SKIP_FIRST_TIME_EXPERIENCE: "1"
 
 jobs:
-  test-build:
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-24.04, windows-latest]
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 30
+  platforms:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      matrix: ${{ steps.platforms.outputs.matrix }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Read the shared desktop platform matrix
+        id: platforms
+        run: |
+          python3 - <<'PY' >> "$GITHUB_OUTPUT"
+          import json, pathlib
+          platforms = json.loads(pathlib.Path('.github/scripts/platforms.json').read_text())
+          print('matrix=' + json.dumps({'include': platforms}))
+          PY
+
+  test-build:
+    needs: platforms
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.platforms.outputs.matrix) }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.14'
       - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
         with:
           dotnet-version: 10.0.x
           cache: true
           cache-dependency-path: '**/packages.lock.json'
+      - name: Install Linux desktop and isolated credential-store dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y xvfb xauth libice6 libsm6 libfontconfig1 libx11-6 libxcb1 libxrandr2 libxi6 libxcursor1 libxrender1 libgl1 libgtk-3-0t64 fonts-dejavu-core fonts-noto-cjk libsecret-tools gnome-keyring dbus-x11
       - name: Test package and result verification guards
         shell: bash
-        run: python -B -m unittest discover -s .github/scripts -p 'test_*.py'
+        run: |
+          python -B -m unittest discover -s .github/scripts -p 'test_*.py'
       - name: Restore portable tests from lock files
         run: dotnet restore drcom4scutGUI.Tests/drcom4scutGUI.Tests.csproj --locked-mode
-      - name: Test credentials, configuration and child-process lifecycle
+      - name: Test native Linux Secret Service and child-process lifecycle
+        if: runner.os == 'Linux'
+        run: bash .github/scripts/test_native_secrets.sh
+      - name: Test native macOS Keychain and child-process lifecycle
+        if: runner.os == 'macOS'
+        run: python3 .github/scripts/test_native_keychain.py
+      - name: Test native Windows credential storage and child-process lifecycle
+        if: runner.os == 'Windows'
         run: dotnet test --project drcom4scutGUI.Tests/drcom4scutGUI.Tests.csproj --configuration Release --no-restore --report-trx --results-directory artifacts/test-results
       - name: Verify tests actually executed
         shell: bash
         run: python .github/scripts/check_test_results.py artifacts/test-results
-      - name: Restore Windows GUI from lock files
-        run: dotnet restore drcom4scutGUI/drcom4scutGUI.csproj --locked-mode
-      - name: Build Windows GUI (cross-build on Linux)
-        run: dotnet build drcom4scutGUI/drcom4scutGUI.csproj --configuration Release --no-restore -warnaserror
-      - name: Publish self-contained Windows x64 GUI
-        if: runner.os == 'Windows'
-        run: dotnet publish drcom4scutGUI/drcom4scutGUI.csproj --configuration Release --runtime win-x64 --self-contained true --no-restore --output artifacts/publish/win-x64
-      - name: Package GUI with version and checksums
-        if: runner.os == 'Windows'
+      - name: Restore headless UI tests from lock files
+        run: dotnet restore drcom4scutGUI.UiTests/drcom4scutGUI.UiTests.csproj --locked-mode
+      - name: Test actual controls and desktop interactions
+        run: dotnet test --project drcom4scutGUI.UiTests/drcom4scutGUI.UiTests.csproj --configuration Release --no-restore --report-trx --results-directory artifacts/ui-test-results
+      - name: Verify UI tests actually executed
         shell: bash
-        run: python .github/scripts/package_release.py --publish-dir artifacts/publish/win-x64
+        run: python .github/scripts/check_test_results.py artifacts/ui-test-results
+      - name: Restore the native desktop runtime from lock files
+        run: dotnet restore drcom4scutGUI/drcom4scutGUI.csproj --runtime ${{ matrix.runtime }} --locked-mode
+      - name: Publish self-contained native GUI
+        run: dotnet publish drcom4scutGUI/drcom4scutGUI.csproj --configuration Release --runtime ${{ matrix.runtime }} --self-contained true --no-restore --output artifacts/publish/${{ matrix.runtime }} -warnaserror
+      - name: Package native GUI and validate executable ABI
+        shell: bash
+        run: python .github/scripts/package_release.py --runtime ${{ matrix.runtime }} --publish-dir artifacts/publish/${{ matrix.runtime }}
+      - name: Launch the actual Linux release GUI in a virtual display
+        if: runner.os == 'Linux'
+        run: xvfb-run --auto-servernum python3 .github/scripts/smoke_package.py --runtime ${{ matrix.runtime }}
+      - name: Launch the actual native release GUI
+        if: runner.os != 'Linux'
+        shell: bash
+        run: python .github/scripts/smoke_package.py --runtime ${{ matrix.runtime }}
       - name: Upload GUI package
-        if: runner.os == 'Windows'
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: gui-package-win-x64
+          name: gui-package-${{ matrix.runtime }}
           path: dist/*
           if-no-files-found: error
           retention-days: 14
-      - name: Upload test results
+      - name: Upload native and UI test results
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: gui-tests-${{ runner.os }}
-          path: artifacts/test-results/*.trx
+          name: gui-tests-${{ matrix.runtime }}
+          path: |
+            artifacts/test-results/*.trx
+            artifacts/ui-test-results/*.trx
           if-no-files-found: warn
           retention-days: 14

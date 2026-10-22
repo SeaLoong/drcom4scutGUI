@@ -27,9 +27,33 @@ public sealed class ControlPipeTests
         Assert.Contains("graceful-stop", lines);
         Assert.DoesNotContain("synthetic-pipe-secret", string.Join('\n', lines));
         string[] args = System.Text.Json.JsonSerializer.Deserialize<string[]>(lines.First())!;
-        int index = Array.IndexOf(args, "--control-pipe");
+        int index = Array.IndexOf(args, OperatingSystem.IsWindows() ? "--control-pipe" : "--control-socket");
         Assert.True(index >= 0);
-        Assert.StartsWith(@"\\.\pipe\drcom4scut-", args[index + 1]);
+        if (OperatingSystem.IsWindows()) Assert.StartsWith(@"\\.\pipe\drcom4scut-", args[index + 1]);
+        else
+        {
+            Assert.StartsWith("/tmp/d4s-", args[index + 1]);
+            Assert.True(Encoding.UTF8.GetByteCount(args[index + 1]) <= 103);
+            Assert.False(File.Exists(args[index + 1]));
+        }
+    }
+
+    [Fact]
+    public async Task CoreCanFinishCleanupThatExceedsTheOldTwoSecondBudget()
+    {
+        using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        var ready = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var lines = new ConcurrentQueue<string>();
+        Task<int> running = new CoreProcessSession(Helper).RunAsync(new("slow-stop", "synthetic-pipe-secret"), line =>
+        {
+            lines.Enqueue(line);
+            if (line.StartsWith("ready:", StringComparison.Ordinal)) ready.TrySetResult();
+        }, _ => { }, cancellation.Token);
+        await ready.Task.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+        cancellation.Cancel();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => running.WaitAsync(TimeSpan.FromSeconds(8), TestContext.Current.CancellationToken));
+        Assert.Contains("graceful-stop", lines);
+        Assert.Contains("cleanup-completed", lines);
     }
 
     [Fact]
@@ -53,15 +77,17 @@ public sealed class ControlPipeTests
     [Fact]
     public async Task ParentPipeDisconnectionIsVisibleToTheChildWithoutSendingCredentialsAgain()
     {
-        string name = "drcom4scut-" + Guid.NewGuid().ToString("N");
-        await using var server = new NamedPipeServerStream(name, PipeDirection.Out, 1,
-            PipeTransmissionMode.Byte, PipeOptions.Asynchronous | PipeOptions.CurrentUserOnly);
+        string directory = OperatingSystem.IsWindows()
+            ? Directory.CreateTempSubdirectory("drcom-control-tests-").FullName
+            : Directory.CreateDirectory(Path.Combine("/tmp", "d4s-test-" + Guid.NewGuid().ToString("N")[..16]),
+                UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute).FullName;
+        try
+        {
         ProcessStartInfo info = CoreProcessSession.CreateStartInfo(Helper, new("control-eof", "synthetic-pipe-secret"));
-        info.ArgumentList.Add("--control-pipe");
-        info.ArgumentList.Add(@"\\.\pipe\" + name);
+        await using var server = new PrivateControlServer(info, directory);
         using var child = new Process { StartInfo = info };
         Assert.True(child.Start());
-        Task connection = server.WaitForConnectionAsync(TestContext.Current.CancellationToken);
+        Task connection = server.Connection;
         await child.StandardInput.WriteLineAsync("synthetic-pipe-secret".AsMemory(), TestContext.Current.CancellationToken);
         child.StandardInput.Close();
         Task<string> error = child.StandardError.ReadToEndAsync(TestContext.Current.CancellationToken);
@@ -78,5 +104,7 @@ public sealed class ControlPipeTests
         Assert.Equal(0, child.ExitCode);
         Assert.Contains("parent-disconnected", remaining);
         Assert.DoesNotContain("synthetic-pipe-secret", string.Join('\n', lines) + remaining + await error);
+        }
+        finally { Directory.Delete(directory, recursive: true); }
     }
 }

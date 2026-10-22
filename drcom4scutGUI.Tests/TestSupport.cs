@@ -11,8 +11,8 @@ internal sealed class TemporaryDirectory : IDisposable
     public void Dispose() => Directory.Delete(Path, recursive: true);
 }
 
-// Production uses DPAPI; the deterministic portable substitute lets the same
-// persistence contract run on Linux without claiming to test Windows cryptography.
+// Production uses the current user's OS vault; this deterministic substitute
+// exercises persistence without claiming to test native platform cryptography.
 internal sealed class TestProtector : ISecretProtector
 {
     public string Protect(string plaintext) => "test:" + Convert.ToBase64String(Encoding.UTF8.GetBytes(plaintext));

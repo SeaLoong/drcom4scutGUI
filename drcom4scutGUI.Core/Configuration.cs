@@ -12,6 +12,7 @@ public sealed class Account : IComparable<Account>
     public string Name { get; set; } = "";
     [JsonIgnore]
     public string Password { get; set; } = "";
+    public bool RememberPassword { get; set; } = true;
     public string IP { get; set; } = "";
     public int CompareTo(Account? other) => string.Compare(Name, other?.Name, StringComparison.Ordinal);
 }
@@ -33,7 +34,7 @@ public sealed class Configuration
 }
 
 /// <summary>
-/// Stores only protected passwords. Legacy plaintext files are replaced only
+/// Stores protected passwords only when requested. Legacy files are replaced only
 /// after every account has been protected and the new document is complete.
 /// </summary>
 public sealed class ConfigurationStore(string path, ISecretProtector protector, string? legacyPath = null)
@@ -76,10 +77,12 @@ public sealed class ConfigurationStore(string path, ISecretProtector protector, 
                     if (value.ValueKind == JsonValueKind.Null) continue;
                     string name = ReadString(value, "name");
                     if (string.IsNullOrEmpty(name) || configuration.Find(name) is not null) continue;
+                    bool remember = !value.TryGetProperty("rememberPassword", out _) || ReadBoolean(value, "rememberPassword");
+                    string encrypted = schema == 2 ? ReadRequiredString(value, "encryptedPassword") : "";
                     string password = schema == 2
-                        ? protector.Unprotect(ReadRequiredString(value, "encryptedPassword"))
+                        ? remember && encrypted.Length > 0 ? protector.Unprotect(encrypted) : ""
                         : ReadString(value, "password");
-                    configuration.Accounts.Add(new Account { Name = name, Password = password, IP = ReadString(value, "ip") });
+                    configuration.Accounts.Add(new Account { Name = name, Password = password, RememberPassword = remember, IP = ReadString(value, "ip") });
                 }
             }
             else if (schema == 1)
@@ -130,13 +133,15 @@ public sealed class ConfigurationStore(string path, ISecretProtector protector, 
             Accounts = configuration.Accounts.Select(account => new StoredAccount
             {
                 Name = account.Name,
-                EncryptedPassword = protector.Protect(account.Password),
+                EncryptedPassword = account.RememberPassword && account.Password.Length > 0 ? protector.Protect(account.Password) : "",
+                RememberPassword = account.RememberPassword,
                 IP = account.IP
             }).ToList()
         };
         byte[] bytes = JsonSerializer.SerializeToUtf8Bytes(encrypted, new JsonSerializerOptions { WriteIndented = true });
         string directory = Path.GetDirectoryName(FilePath)!;
         Directory.CreateDirectory(directory);
+        if (!OperatingSystem.IsWindows()) File.SetUnixFileMode(directory, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
         string temporary = Path.Combine(directory, $".{Path.GetFileName(FilePath)}.{Guid.NewGuid():N}.tmp");
         try
         {
@@ -194,6 +199,7 @@ public sealed class ConfigurationStore(string path, ISecretProtector protector, 
     {
         [JsonPropertyName("name")] public string Name { get; set; } = "";
         [JsonPropertyName("encryptedPassword")] public string EncryptedPassword { get; set; } = "";
+        [JsonPropertyName("rememberPassword")] public bool RememberPassword { get; set; } = true;
         [JsonPropertyName("ip")] public string IP { get; set; } = "";
     }
 }

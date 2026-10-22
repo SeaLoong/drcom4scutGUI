@@ -1,5 +1,6 @@
 using System.Security.Cryptography;
 using System.IO.Pipes;
+using System.Net.Sockets;
 using System.Text;
 using System.Text.Json;
 
@@ -18,17 +19,17 @@ string Option(string key)
 if (args is ["--help"])
 {
     Console.WriteLine(Path.GetFileName(Environment.ProcessPath!).StartsWith("Legacy", StringComparison.Ordinal)
-        ? "Legacy client --username --password" : "Client --username --password-stdin --control-pipe --status-file --doctor --mode --portal-base --with-udp --require-https-portal");
+        ? "Legacy client --username --password" : "Client --username --password-stdin --control-pipe --control-socket --status-file --doctor --mode --portal-base --with-udp --require-https-portal");
     return 0;
 }
 if (args is ["--version"])
 {
     string fixture = Path.GetFileName(Environment.ProcessPath!);
-    Console.WriteLine(fixture.StartsWith("OldCore", StringComparison.Ordinal) ? "drcom4scut 0.4.0"
-        : fixture.StartsWith("PreviewCore", StringComparison.Ordinal) ? "drcom4scut 0.4.1-preview.1"
-        : fixture.StartsWith("UnknownCore", StringComparison.Ordinal) ? "unknown drcom4scut 0.4.1"
+    Console.WriteLine(fixture.StartsWith("OldCore", StringComparison.Ordinal) ? "drcom4scut 0.4.1"
+        : fixture.StartsWith("PreviewCore", StringComparison.Ordinal) ? "drcom4scut 0.5.0-preview.1"
+        : fixture.StartsWith("UnknownCore", StringComparison.Ordinal) ? "unknown drcom4scut 0.5.0"
         : fixture.StartsWith("FutureCore", StringComparison.Ordinal) ? "drcom4scut 1.2.3+release.build"
-        : "drcom4scut 0.4.1");
+        : "drcom4scut 0.5.0");
     return 0;
 }
 if (args is ["--doctor"])
@@ -53,6 +54,23 @@ if (!args.Contains("--password-stdin") || args.Contains("--password") || args.Co
     Console.Error.WriteLine("secure-input-required");
     return 4;
 }
+if (Option("--username") == "exit-before-stdin")
+{
+    // Publish an ordinary startup state, but deliberately never read stdin or
+    // connect the private control channel. This emulates a core that rejects
+    // its configuration/features while the parent is still writing its secret.
+    Console.WriteLine(JsonSerializer.Serialize(args));
+    string statusPath = Option("--status-file");
+    await File.WriteAllTextAsync(statusPath, JsonSerializer.Serialize(new
+    {
+        schema = 1, pid = Environment.ProcessId, phase = "waiting-interface",
+        @interface = "synthetic-adapter", eap_authenticated = false, online = false
+    }));
+    using CancellationTokenSource deadline = new(TimeSpan.FromSeconds(10));
+    while (!File.Exists(statusPath + ".startup-observed")) await Task.Delay(20, deadline.Token);
+    Console.Error.WriteLine("synthetic startup configuration rejected");
+    return 23;
+}
 string? password = await Console.In.ReadLineAsync();
 string trailing = await Console.In.ReadToEndAsync();
 if (password is null || trailing.Length != 0)
@@ -67,16 +85,32 @@ if (username != "quiet-status")
     Console.WriteLine("stdin-sha256:" + Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(password))));
     Console.Error.WriteLine("stderr-drained");
 }
-string controlPath = Option("--control-pipe");
-if (!controlPath.StartsWith(@"\\.\pipe\drcom4scut-", StringComparison.Ordinal))
+async Task<Stream> OpenControlAsync()
 {
-    Console.Error.WriteLine("private-control-pipe-required");
-    return 6;
+    if (OperatingSystem.IsWindows())
+    {
+        string path = Option("--control-pipe");
+        if (!path.StartsWith(@"\\.\pipe\drcom4scut-", StringComparison.Ordinal))
+            throw new InvalidDataException("private-control-pipe-required");
+        string name = path[@"\\.\pipe\".Length..];
+        var pipe = new NamedPipeClientStream(".", name, PipeDirection.In,
+            PipeOptions.Asynchronous | PipeOptions.CurrentUserOnly);
+        await pipe.ConnectAsync(5000);
+        return pipe;
+    }
+    string socketPath = Option("--control-socket");
+    if (!Path.IsPathFullyQualified(socketPath) || Encoding.UTF8.GetByteCount(socketPath) > 103)
+        throw new InvalidDataException("private-control-socket-required");
+    var socket = new Socket(AddressFamily.Unix, SocketType.Stream, ProtocolType.Unspecified);
+    try
+    {
+        using CancellationTokenSource deadline = new(TimeSpan.FromSeconds(5));
+        await socket.ConnectAsync(new UnixDomainSocketEndPoint(socketPath), deadline.Token);
+        return new NetworkStream(socket, ownsSocket: true);
+    }
+    catch { socket.Dispose(); throw; }
 }
-string pipeName = controlPath[@"\\.\pipe\".Length..];
-await using var control = new NamedPipeClientStream(".", pipeName, PipeDirection.In,
-    PipeOptions.Asynchronous | PipeOptions.CurrentUserOnly);
-await control.ConnectAsync(5000);
+await using Stream control = await OpenControlAsync();
 if (username is "quiet-status" or "status-with-redacted-marker" or "forged-success" or "status-transition")
 {
     string statusPath = Option("--status-file");
@@ -108,7 +142,7 @@ if (username is "quiet-status" or "status-with-redacted-marker" or "forged-succe
     using StreamReader stop = new(control, Encoding.UTF8, leaveOpen: true);
     return await stop.ReadLineAsync() == "stop" ? 0 : 7;
 }
-if (Option("--username") is "wait-for-cancellation" or "ignore-stop" or "control-eof")
+if (Option("--username") is "wait-for-cancellation" or "ignore-stop" or "control-eof" or "slow-stop")
 {
     Console.WriteLine("ready:" + Environment.ProcessId);
     if (Option("--username") == "ignore-stop") await Task.Delay(Timeout.InfiniteTimeSpan);
@@ -117,6 +151,11 @@ if (Option("--username") is "wait-for-cancellation" or "ignore-stop" or "control
     if (instruction is null) Console.WriteLine("parent-disconnected");
     else if (instruction == "stop") Console.WriteLine("graceful-stop");
     else return 7;
+    if (username == "slow-stop")
+    {
+        await Task.Delay(TimeSpan.FromMilliseconds(2500));
+        Console.WriteLine("cleanup-completed");
+    }
     return 0;
 }
 if (Option("--username") == "echo-password")

@@ -15,7 +15,7 @@ public sealed class CoreProcessSessionTests
     public async Task CapabilityProbeAndDoctorNeedNoStoredCredential()
     {
         var session = new CoreProcessSession(Helper);
-        Assert.Equal("drcom4scut 0.4.1", await session.VerifyCoreAsync(TestContext.Current.CancellationToken));
+        Assert.Equal("drcom4scut 0.5.0", await session.VerifyCoreAsync(TestContext.Current.CancellationToken));
         CoreDoctorReport report = await session.DoctorAsync(TestContext.Current.CancellationToken);
         Assert.True(report.PrerequisitesMet);
         Assert.Contains("no real capture opened", report.Report);
@@ -57,7 +57,7 @@ public sealed class CoreProcessSessionTests
         try
         {
             var error = await Assert.ThrowsAsync<InvalidOperationException>(() => new CoreProcessSession(renamed).VerifyCoreAsync(TestContext.Current.CancellationToken));
-            Assert.Contains("0.4.1", error.Message);
+            Assert.Contains("0.5.0", error.Message);
             Assert.Contains("不会回退", error.Message);
         }
         finally { File.Delete(renamed); }
@@ -74,7 +74,7 @@ public sealed class CoreProcessSessionTests
         try
         {
             var error = await Assert.ThrowsAsync<InvalidOperationException>(() => new CoreProcessSession(fixture).VerifyCoreAsync(TestContext.Current.CancellationToken));
-            Assert.Contains("0.4.1", error.Message);
+            Assert.Contains("0.5.0", error.Message);
         }
         finally { File.Delete(fixture); }
     }
@@ -171,6 +171,62 @@ public sealed class CoreProcessSessionTests
         using var cancellation = new CancellationTokenSource();
         cancellation.Cancel();
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => new CoreProcessSession("missing-core").RunAsync(new CoreLaunchOptions("student", "secret"), _ => { }, _ => { }, cancellation.Token));
+    }
+
+    [Fact]
+    public async Task EarlyExitDuringSecretWriteStillStopsPollingAndRemovesPrivateFiles()
+    {
+        // Exceed the OS pipe buffer so the write deterministically remains
+        // pending until the helper exits without reading any stdin bytes.
+        string secret = "synthetic-do-not-leak-" + new string('x', 256 * 1024);
+        var arguments = new TaskCompletionSource<string[]>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var startup = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var states = new ConcurrentQueue<CoreConnectionStatus>();
+        var errors = new ConcurrentQueue<string>();
+        Task<int> run = new CoreProcessSession(Helper).RunAsync(new("exit-before-stdin", secret), line =>
+        {
+            if (line.StartsWith("[\"", StringComparison.Ordinal)) arguments.TrySetResult(JsonSerializer.Deserialize<string[]>(line)!);
+        }, errors.Enqueue, TestContext.Current.CancellationToken, state =>
+        {
+            states.Enqueue(state);
+            if (state.Phase == CoreConnectionPhase.WaitingInterface) startup.TrySetResult();
+        });
+        string[] args = await arguments.Task.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+        string path = args[Array.IndexOf(args, "--status-file") + 1];
+        string directory = Path.GetDirectoryName(path)!;
+        try
+        {
+            await startup.Task.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+            int pid;
+            using (JsonDocument document = JsonDocument.Parse(await File.ReadAllBytesAsync(path, TestContext.Current.CancellationToken)))
+                pid = document.RootElement.GetProperty("pid").GetInt32();
+            await File.WriteAllTextAsync(path + ".startup-observed", "observed", TestContext.Current.CancellationToken);
+            InvalidOperationException failure = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+                run.WaitAsync(TimeSpan.FromSeconds(6), TestContext.Current.CancellationToken));
+            Assert.Contains("核心在接收密码前已关闭输入", failure.Message);
+            Assert.DoesNotContain(secret, failure.ToString());
+            Assert.DoesNotContain(secret, string.Join('\n', errors));
+            Assert.Contains("synthetic startup configuration rejected", errors);
+            Assert.False(Directory.Exists(directory));
+            Assert.DoesNotContain("--password", args);
+            Assert.DoesNotContain(secret, args);
+
+            // A leaked status task would accept this replacement for its old
+            // child's PID and invoke another callback after RunAsync completed.
+            int completedCount = states.Count;
+            Directory.CreateDirectory(directory);
+            await File.WriteAllTextAsync(path, JsonSerializer.Serialize(new
+            {
+                schema = 1, pid, phase = "online", @interface = "synthetic-adapter",
+                eap_authenticated = true, online = true
+            }), TestContext.Current.CancellationToken);
+            await Task.Delay(350, TestContext.Current.CancellationToken);
+            Assert.Equal(completedCount, states.Count);
+        }
+        finally
+        {
+            if (Directory.Exists(directory)) Directory.Delete(directory, recursive: true);
+        }
     }
 
     [Fact]

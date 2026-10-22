@@ -2,7 +2,6 @@ using System;
 using System.ComponentModel;
 using System.Diagnostics;
 using System.IO;
-using System.IO.Pipes;
 using System.Security.AccessControl;
 using System.Security.Principal;
 using System.Text;
@@ -63,26 +62,27 @@ public sealed class CoreProcessSession(string executable)
         using PrivateStatusDirectory statusDirectory = new();
         start.ArgumentList.Add("--status-file");
         start.ArgumentList.Add(statusDirectory.StatusPath);
-        string pipeName = "drcom4scut-" + Guid.NewGuid().ToString("N");
-        start.ArgumentList.Add("--control-pipe");
-        start.ArgumentList.Add(@"\\.\pipe\" + pipeName);
-        using CancellationTokenSource controlLifetime = new();
         using CancellationTokenSource statusLifetime = new();
-        await using NamedPipeServerStream control = new(pipeName, PipeDirection.Out, 1,
-            PipeTransmissionMode.Byte, PipeOptions.Asynchronous | PipeOptions.CurrentUserOnly);
+        await using PrivateControlServer control = new(start, statusDirectory.DirectoryPath);
         using Process process = new() { StartInfo = start };
         Start(process);
-        Task connection = control.WaitForConnectionAsync(controlLifetime.Token);
-        // The parent retains this private pipe for the entire session. Its OS
+        // The parent retains this private connection for the entire session. Its OS
         // handle closes on GUI crash, so the core can log off instead of orphaning.
         Task output = DrainAsync(process.StandardOutput, stdout, options.Password);
         Task error = DrainAsync(process.StandardError, stderr, options.Password);
         Task status = MonitorStatusAsync(statusDirectory.StatusPath, process.Id, options, connectionChanged, statusLifetime.Token);
         try
         {
-            process.StandardInput.NewLine = "\n";
-            await process.StandardInput.WriteLineAsync(options.Password.AsMemory(), cancellationToken).ConfigureAwait(false);
-            process.StandardInput.Close();
+            try
+            {
+                process.StandardInput.NewLine = "\n";
+                await process.StandardInput.WriteLineAsync(options.Password.AsMemory(), cancellationToken).ConfigureAwait(false);
+                process.StandardInput.Close();
+            }
+            catch (Exception failure) when (failure is IOException or InvalidOperationException)
+            {
+                throw new InvalidOperationException("核心在接收密码前已关闭输入，请检查核心版本、启动日志和运行权限。");
+            }
             await process.WaitForExitAsync(cancellationToken).ConfigureAwait(false);
             await Task.WhenAll(output, error).ConfigureAwait(false);
             cancellationToken.ThrowIfCancellationRequested();
@@ -90,40 +90,45 @@ public sealed class CoreProcessSession(string executable)
         }
         finally
         {
-            process.StandardInput.Close();
+            // StreamWriter.Close may flush a buffered tail to an already dead
+            // child. That cleanup failure must never skip stopping the child,
+            // cancelling/awaiting its status reader, or removing private files.
+            CloseStandardInput(process);
             try
             {
-                await StopOwnedGracefullyAsync(process, control, connection).ConfigureAwait(false);
+                await StopOwnedGracefullyAsync(process, control).ConfigureAwait(false);
             }
             finally
             {
                 statusLifetime.Cancel();
-                controlLifetime.Cancel();
                 try { await status.ConfigureAwait(false); }
                 catch (OperationCanceledException) when (statusLifetime.IsCancellationRequested) { }
-                try { await connection.ConfigureAwait(false); }
-                catch (OperationCanceledException) { }
-                catch (IOException) { }
                 await Task.WhenAll(output, error).ConfigureAwait(false);
             }
         }
     }
 
-    private static async Task StopOwnedGracefullyAsync(Process process, NamedPipeServerStream control, Task connection)
+    private static void CloseStandardInput(Process process)
+    {
+        try { process.StandardInput.Close(); }
+        catch (Exception failure) when (failure is IOException or InvalidOperationException) { }
+    }
+
+    private static async Task StopOwnedGracefullyAsync(Process process, PrivateControlServer control)
     {
         if (process.HasExited) return;
         // A single budget covers connection, STOP delivery and cooperative exit.
         // A non-cooperating child is killed only after the grace period expires.
-        using CancellationTokenSource grace = new(TimeSpan.FromSeconds(2));
+        // The core has a three-second shutdown budget, including EAP Logoff and
+        // offline hooks. Allow it to finish before considering a forced stop.
+        using CancellationTokenSource grace = new(TimeSpan.FromSeconds(4));
         try
         {
-            await connection.WaitAsync(grace.Token).ConfigureAwait(false);
-            await control.WriteAsync("stop\n"u8.ToArray(), grace.Token).ConfigureAwait(false);
-            await control.FlushAsync(grace.Token).ConfigureAwait(false);
+            await control.SendStopAsync(grace.Token).ConfigureAwait(false);
             await process.WaitForExitAsync(grace.Token).ConfigureAwait(false);
             return;
         }
-        catch (Exception failure) when (failure is OperationCanceledException or IOException or InvalidOperationException) { }
+        catch (Exception failure) when (failure is OperationCanceledException or IOException or System.Net.Sockets.SocketException or InvalidOperationException) { }
         KillOwned(process);
         await process.WaitForExitAsync(CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(3)).ConfigureAwait(false);
     }
@@ -132,14 +137,14 @@ public sealed class CoreProcessSession(string executable)
     public async Task<string> VerifyCoreAsync(CancellationToken cancellationToken)
     {
         string help = (await ProbeAsync("--help", cancellationToken).ConfigureAwait(false)).Output;
-        if (!help.Contains("--password-stdin", StringComparison.Ordinal) || !help.Contains("--control-pipe", StringComparison.Ordinal) || !help.Contains("--status-file", StringComparison.Ordinal) || !help.Contains("--with-udp", StringComparison.Ordinal) || !help.Contains("--require-https-portal", StringComparison.Ordinal))
-            throw new InvalidOperationException("核心不支持所需的安全密码输入、连接状态和生命周期控制。请将 drcom4scut 0.4.1 或更新版本放在 GUI 同目录，不会回退到命令行明文密码。");
+        if (!help.Contains("--password-stdin", StringComparison.Ordinal) || !help.Contains(OperatingSystem.IsWindows() ? "--control-pipe" : "--control-socket", StringComparison.Ordinal) || !help.Contains("--status-file", StringComparison.Ordinal) || !help.Contains("--with-udp", StringComparison.Ordinal) || !help.Contains("--require-https-portal", StringComparison.Ordinal))
+            throw new InvalidOperationException("核心不支持所需的安全密码输入、连接状态和生命周期控制。请将 drcom4scut 0.5.0 或更新版本放在 GUI 同目录，不会回退到命令行明文密码。");
         string reported = (await ProbeAsync("--version", cancellationToken).ConfigureAwait(false)).Output.Trim();
         Match release = Regex.Match(reported,
             @"\Adrcom4scut (?<version>(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*))(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?\z",
             RegexOptions.CultureInvariant);
-        if (!release.Success || !Version.TryParse(release.Groups["version"].Value, out Version? version) || version < new Version(0, 4, 1))
-            throw new InvalidOperationException("请使用 drcom4scut 0.4.1 或更新的正式版本；当前核心版本过旧或无法识别，认证尚未启动。");
+        if (!release.Success || !Version.TryParse(release.Groups["version"].Value, out Version? version) || version < new Version(0, 5, 0))
+            throw new InvalidOperationException("请使用 drcom4scut 0.5.0 或更新的正式版本；当前核心版本过旧或无法识别，认证尚未启动。");
         return reported;
     }
 
@@ -170,7 +175,7 @@ public sealed class CoreProcessSession(string executable)
             string text = await output.ConfigureAwait(false);
             string errors = await error.ConfigureAwait(false);
             if (process.ExitCode != 0 && !(argument == "--doctor" && process.ExitCode == 1))
-                throw new InvalidOperationException("核心自检未成功，请检查版本、Npcap 安装和网卡权限。" + (argument == "--doctor" ? "\n" + errors : ""));
+                throw new InvalidOperationException("核心自检未成功，请检查版本和网卡权限；Windows 有线模式还需要 Npcap。" + (argument == "--doctor" ? "\n" + errors : ""));
             return new ProbeResult(process.ExitCode, text, errors);
         }
         finally
@@ -207,7 +212,7 @@ public sealed class CoreProcessSession(string executable)
         }
         catch (Win32Exception)
         {
-            throw new InvalidOperationException("无法启动同目录的 drcom4scut.exe。请从可信的发布来源安装 0.4.1 或更新版本；有线认证需要安装 Npcap。");
+            throw new InvalidOperationException("无法启动安装目录中的 drcom4scut 核心。请安装对应系统和 CPU 的 0.5.0 或更新版本，并检查文件执行权限；Windows 有线模式还需要 Npcap。");
         }
     }
 
@@ -261,11 +266,17 @@ public sealed class CoreProcessSession(string executable)
     private sealed class PrivateStatusDirectory : IDisposable
     {
         private readonly DirectoryInfo directory;
+        public string DirectoryPath => directory.FullName;
         public string StatusPath => Path.Combine(directory.FullName, "status.json");
 
         public PrivateStatusDirectory()
         {
-            directory = Directory.CreateTempSubdirectory("drcom4scut-gui-");
+            // macOS sockaddr_un allows only 103 path bytes. Its default TMPDIR
+            // can already exceed that budget, so keep the private endpoint short.
+            directory = OperatingSystem.IsWindows()
+                ? Directory.CreateTempSubdirectory("drcom4scut-gui-")
+                : Directory.CreateDirectory(Path.Combine("/tmp", "d4s-" + Guid.NewGuid().ToString("N")[..24]),
+                    UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
             try
             {
                 if (OperatingSystem.IsWindows())

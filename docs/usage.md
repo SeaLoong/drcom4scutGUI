@@ -2,6 +2,40 @@
 
 [返回首页](../README.md)
 
+## 安装和系统要求
+
+每个平台均有 x64 和 ARM64 包，自带运行时，不包含认证核心。选择与电脑处理器匹配的 GUI 和核心，不依赖模拟器运行另一架构的包。GUI 需要核心 0.5.0 或更新版本。
+
+### Windows
+
+解压 `win-x64` 或 `win-arm64` 包，将对应的 `drcom4scut.exe` 放在 `drcom4scutGUI.exe` 同目录，再打开 GUI。有线模式安装与系统匹配的 [Npcap](https://npcap.com/#download)；无线 Portal 不需要它。推荐使用当前受支持的 Windows 11 系统。
+
+### macOS
+
+Intel Mac 使用 `osx-x64`，Apple Silicon 使用 `osx-arm64`。解压后，将对应架构的核心 `drcom4scut` 放在 `drcom4scutGUI.app` **同级目录**，再打开 `.app`。不要将核心写入 `.app` 内部，也不要只移动 `.app` 而留下配套核心。GUI 支持 macOS 15 及 .NET 10 当前支持的更新版本；[官方支持列表](https://github.com/dotnet/core/blob/main/release-notes/10.0/supported-os.md)与核心 CLI 的要求不同。
+
+发布包只做本地 ad-hoc 签名，没有 Apple Developer ID 签名或公证。首次打开被拦截时，先核对来源和 Release 的 SHA-256，再按 Apple 的[单个应用放行方法](https://support.apple.com/guide/mac-help/open-a-mac-app-from-an-unknown-developer-mh40616/mac)，在“系统设置 → 隐私与安全性”中允许该程序；不需要关闭系统 Gatekeeper。独立核心也应来自相同可信发布来源。
+
+有线模式需要系统 BPF 访问权限，配置方法见[核心 macOS 指南](https://github.com/SeaLoong/drcom4scut/blob/master/docs/macos.md#有线抓包权限)。完成授权后，以普通用户打开 GUI。无线 Portal 不需要 BPF 权限。
+
+### Linux
+
+`linux-x64`、`linux-arm64` 面向 glibc 桌面系统，例如 Ubuntu 22.04/24.04。解压后将核心 `drcom4scut` 放在 GUI 可执行文件同目录，运行 `./drcom4scutGUI`。它们不是用于 OpenWrt/musl 的图形界面包；路由器应使用独立核心与 LuCI。
+
+需要 X11 桌面，或提供 XWayland 的 Wayland 会话。自包含包仍需系统的图形库、字体和运行时原生库。Ubuntu 24.04 上可安装：
+
+```sh
+sudo apt install libx11-6 libice6 libsm6 libxcb1 libxrandr2 libxi6 \
+  libxcursor1 libxrender1 libgl1 libfontconfig1 libgtk-3-0t64 \
+  libicu74 libssl3t64 fonts-noto-cjk
+```
+
+其他发行版使用对应包名。中文显示为方框时，安装可用的中文字体，例如 Ubuntu 的 `fonts-noto-cjk`。完整库要求参考 [Avalonia Linux 说明](https://docs.avaloniaui.net/docs/supported-platforms#desktop-linux)和 [.NET Linux 系统要求](https://github.com/dotnet/core/blob/main/release-notes/10.0/supported-os.md)。
+
+“记住密码”还需要 `/usr/bin/secret-tool` 和可用、已解锁的 Secret Service 桌面密码库。Ubuntu 可安装 `libsecret-tools`；仅安装命令行工具并不会自动创建或解锁密码库。缺少这些条件时，取消“记住密码”仍可进行本次认证。
+
+GUI 使用普通用户运行。有线模式由管理员为已校验、妥善安装的核心授予必要抓包权限；例如可为可信核心设置 `CAP_NET_RAW`，再用核心的 `doctor` 验证。更新替换核心后应重新检查权限。无线 Portal 不需要原始抓包权限。
+
 ## 有线认证
 
 1. 将电脑连接到校园网以太网，启动 GUI。
@@ -10,7 +44,7 @@
 4. 本机源 IP 通常留空；只有需要固定使用某个本机 IPv4 时才填写。
 5. 点击“认证”，观察状态和日志。
 
-完整有线模式先完成 802.1X，再建立 UDP 会话与心跳；两者都成功后才显示成功并收起窗口。“有线仅 EAP”只验证 802.1X，不建立 UDP 会话，适用于已经确认不需要 UDP 的网络。
+完整有线模式先完成 802.1X，再建立 UDP 会话与心跳；两者都成功后才显示成功。Windows、macOS 在托盘可用时收起窗口；Linux 保留普通窗口。“有线仅 EAP”只验证 802.1X，不建立 UDP 会话，适用于已经确认不需要 UDP 的网络。
 
 界面的认证阶段和在线提示来自本次核心会话的状态。日志用于排查问题，日志中出现“成功”文字不等于本次连接已经在线。
 
@@ -41,11 +75,13 @@ HTTPS 门户不会自动降级为 HTTP，API 也不能换到其他主机。校�
 - 修改密码：选中账号，输入新密码后点击“认证”。
 - 删除账号：停止认证，选中账号，点击“删除”并确认。
 
+“记住密码”按账号设置。取消后仍保存账号及网络设置，本次运行可使用刚输入的密码；下次启动需要重新输入。登录启动与自动认证不会从未保存的记录恢复密码。
+
 删除账号只移除本机保存的记录，不会注销或删除学校提供的账号。保存位置、换电脑及恢复方法见[账号与隐私](security.md)。
 
 ## 托盘、停止和退出
 
-认证成功或手动最小化后，窗口会隐藏到托盘，认证仍在继续。左键点击托盘图标，或从托盘菜单选择“打开”，可以恢复窗口。
+Windows、macOS 在托盘可用时可将窗口收起，认证仍在继续；从托盘菜单选择“打开”恢复窗口。macOS 使用菜单栏图标的菜单。Linux 保留普通窗口，即使桌面没有托盘宿主也可从窗口或任务栏操作。
 
 在线会话转为等待网卡、重新认证或断开时，窗口会重新显示相应状态，核心继续按配置恢复连接。
 
@@ -53,9 +89,9 @@ HTTPS 门户不会自动降级为 HTTP，API 也不能换到其他主机。校�
 
 ## 自动启动和自动认证
 
-“Windows 登录时启动”设置当前 Windows 用户的登录启动项，不需要管理员计划任务。
+“登录系统时启动”仅设置当前用户的登录启动项，不安装系统服务或管理员计划任务：Windows 使用当前用户的启动登记，macOS 使用用户 LaunchAgent，Linux 使用 XDG 桌面自动启动项。macOS 设置在下次登录时生效，不会立刻再启动一个 GUI。
 
-“打开 GUI 后自动认证”使用已选账号和当前认证模式开始认证。只勾选前一项会打开 GUI，但不会立即认证；只勾选后一项则需要先手动打开 GUI。
+“打开 GUI 后自动认证”使用已选账号和当前认证模式开始认证。只勾选前一项会打开 GUI，但不会立即认证；只勾选后一项则需要先手动打开 GUI。需要登录后直接认证时，两项都开启并保存所选账号密码。移动安装目录后，重新设置登录启动项，使它指向当前程序位置。
 
 ## 排查连接问题
 
@@ -68,7 +104,7 @@ HTTPS 门户不会自动降级为 HTTP，API 也不能换到其他主机。校�
 
 ## 高级：核心配置
 
-大多数用户只需使用界面。核心的其他选项位于 `%LOCALAPPDATA%\drcom4scutGUI\core.yml`；修改前先停止认证，保留原文件，并参考[核心文档](https://github.com/SeaLoong/drcom4scut#readme)。不要在该文件填写账号密码，GUI 会提供本次认证所需的凭据。
+大多数用户只需使用界面。核心的其他选项位于 GUI [配置目录](security.md#保存了哪些内容)下的 `core.yml`；修改前先停止认证，保留原文件，并参考[核心文档](https://github.com/SeaLoong/drcom4scut#readme)。不要在该文件填写账号密码，GUI 会提供本次认证所需的凭据。
 
 GUI 没有单独的协议 profile 选择框。核心默认 `profile: legacy`；只有确认当前网络需要另一个兼容 profile 时，才在 `core.yml` 中调整 `profile`。不应把切换 profile 当作每次安装的必选步骤。
 

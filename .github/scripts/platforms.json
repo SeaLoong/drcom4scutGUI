@@ -1,0 +1,8 @@
+[
+  {"runtime": "win-x64", "os": "windows-latest", "format": "pe", "machine": 34404, "bits": 64, "archive": "zip"},
+  {"runtime": "win-arm64", "os": "windows-11-arm", "format": "pe", "machine": 43620, "bits": 64, "archive": "zip"},
+  {"runtime": "linux-x64", "os": "ubuntu-24.04", "format": "elf", "machine": 62, "bits": 64, "archive": "tar.gz"},
+  {"runtime": "linux-arm64", "os": "ubuntu-24.04-arm", "format": "elf", "machine": 183, "bits": 64, "archive": "tar.gz"},
+  {"runtime": "osx-x64", "os": "macos-15-intel", "format": "macho", "machine": 16777223, "bits": 64, "archive": "tar.gz"},
+  {"runtime": "osx-arm64", "os": "macos-15", "format": "macho", "machine": 16777228, "bits": 64, "archive": "tar.gz"}
+]

@@ -94,7 +94,13 @@ public sealed class StructuredStatusTests
             foreach (FileSystemAccessRule rule in security.GetAccessRules(true, true, typeof(SecurityIdentifier)))
                 Assert.Equal(identity.User, rule.IdentityReference);
         }
-        else Assert.Equal(UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute, File.GetUnixFileMode(directory));
+        else
+        {
+            Assert.Equal(UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute, File.GetUnixFileMode(directory));
+            string socket = Path.Combine(directory, "c.sock");
+            Assert.Equal(UnixFileMode.UserRead | UnixFileMode.UserWrite, File.GetUnixFileMode(socket));
+            Assert.True(System.Text.Encoding.UTF8.GetByteCount(socket) <= 103);
+        }
         // The helper holds its Online state until this acknowledgement, avoiding
         // timing guesses about the GUI polling interval or host scheduling.
         await File.WriteAllTextAsync(path + ".online-observed", "observed", TestContext.Current.CancellationToken);

@@ -1,5 +1,3 @@
-using System.Runtime.InteropServices;
-using System.Windows;
+using System.Runtime.CompilerServices;
 
-[assembly: ComVisible(false)]
-[assembly: ThemeInfo(ResourceDictionaryLocation.None, ResourceDictionaryLocation.SourceAssembly)]
+[assembly: InternalsVisibleTo("drcom4scutGUI.UiTests")]

@@ -4,75 +4,89 @@
 
 ## 环境和项目
 
-使用 `global.json` 选择的稳定版 .NET 10 SDK。项目采用 C# 14，GUI 为 WPF/Windows Forms 托盘应用，发布目标为自包含的 `win-x64`。
-
-在已有 checkout 的仓库根目录执行下面的命令。Windows 可以构建并运行 GUI；Linux 可以交叉构建 WPF 和运行共享逻辑测试，不能据此确认窗口、托盘、Npcap 或校园网络的实际行为。
+使用 `global.json` 选择的稳定版 .NET 10 SDK、C# 14，以及锁文件中的正式版 Avalonia 桌面依赖。发布目标为六个自包含 RID：`win-x64`、`win-arm64`、`linux-x64`、`linux-arm64`、`osx-x64`、`osx-arm64`。
 
 | 目录 | 职责 |
 | --- | --- |
-| `drcom4scutGUI` | 窗口、托盘、当前用户登录启动设置 |
-| `drcom4scutGUI.Core` | 配置、密码保护接口、核心进程与日志处理 |
-| `drcom4scutGUI.Tests` | 配置、安全参数、异步生命周期及状态测试 |
-| `drcom4scutGUI.Tests/FakeCore` | 验证真实子进程交互的独立辅助程序 |
+| `drcom4scutGUI` | Avalonia 窗口、托盘、当前用户登录启动与桌面入口 |
+| `drcom4scutGUI.Core` | 配置、系统密码保护、核心进程和连接状态 |
+| `drcom4scutGUI.Tests` | 配置、安全参数、系统适配器、真实子进程生命周期 |
+| `drcom4scutGUI.Tests/FakeCore` | 验证 stdin、状态与停止通道的独立辅助进程 |
+| `drcom4scutGUI.UiTests` | Avalonia Headless 下的窗口和交互检查 |
+
+macOS GUI 的支持范围从 15 开始，并要求处于 [.NET 10 官方支持范围](https://github.com/dotnet/core/blob/main/release-notes/10.0/supported-os.md)。这由运行时与桌面依赖共同决定，不等于 Rust 核心的最低操作系统版本。Linux 使用 X11，Wayland 会话需要 XWayland；发行包面向 glibc 桌面，不是 OpenWrt/musl GUI。
 
 ## 锁定恢复、构建和测试
+
+在仓库根目录执行：
 
 ```sh
 dotnet restore drcom4scutGUI.sln --locked-mode
 dotnet build drcom4scutGUI/drcom4scutGUI.csproj --configuration Release --no-restore -warnaserror
-dotnet test --project drcom4scutGUI.Tests/drcom4scutGUI.Tests.csproj --configuration Release --no-restore --report-trx --results-directory artifacts/test-results
+dotnet test --project drcom4scutGUI.Tests/drcom4scutGUI.Tests.csproj --configuration Release --no-restore --report-trx --results-directory artifacts/test-results/core
+dotnet test --project drcom4scutGUI.UiTests/drcom4scutGUI.UiTests.csproj --configuration Release --no-restore --report-trx --results-directory artifacts/test-results/ui
 python .github/scripts/check_test_results.py artifacts/test-results
 python -B -m unittest discover -s .github/scripts -p 'test_*.py'
 ```
 
-测试使用 Microsoft.Testing.Platform；不要将命令替换为 VSTest 的 `--logger` 用法。应检查本次生成的 TRX，确认至少一项测试实际执行且没有失败。发布工具检查不能用格式化或编译成功代替。
+测试使用 Microsoft.Testing.Platform；不要将命令替换为 VSTest 的 `--logger` 用法。结果目录应来自本次运行，并确认每组至少一项测试实际执行且没有失败。平台跳过、无显示测试、原生窗口检查和实网验证分别报告，不能用格式化、编译或零测试代替。
 
-共享测试覆盖凭据序列化、旧文件处理、门户 URL 和参数校验、真实子进程 stdin/双输出流、取消、控制管道和日志处理。Windows 执行实际 DPAPI 测试，Unix 执行本地文件权限测试；对应另一平台的测试会明确跳过。普通自动化不连接真实校园账号。
+共享逻辑测试覆盖凭据序列化、旧文件处理、门户 URL 与参数、真实子进程 stdin/双输出流、取消、控制通道和结构化状态。Windows 执行 DPAPI 与 ACL 条件测试，Unix 执行文件和 socket 权限检查；Headless 测试检查 UI 结构与交互，不要求图形桌面。
 
-依赖版本保存在各项目的 `packages.lock.json`。有意更新包版本后，运行：
+原生密码库验证单独配置测试环境：macOS 的[测试入口](https://github.com/SeaLoong/drcom4scutGUI/blob/master/.github/scripts/test_native_keychain.py)创建临时 Keychain，测试后恢复 runner 的默认钥匙串与搜索列表；Linux 的[测试入口](https://github.com/SeaLoong/drcom4scutGUI/blob/master/.github/scripts/test_native_secrets.sh)在隔离 D-Bus/用户数据目录中启动 Secret Service。它们执行实际系统适配器，不访问开发者个人密码库。本地普通测试缺少相应系统会话时，按测试条件报告跳过，不把跳过当作密码库已验证。
 
-```sh
-dotnet restore drcom4scutGUI.sln --use-lock-file --force-evaluate
-```
+原生窗口检查使用 `--smoke-test`。它实际显示窗口、检查可见尺寸后退出，不读取用户配置、不启动核心、不写密码库，也不进行认证。Linux CI 在 Xvfb 中运行；macOS、Windows 在对应原生 runner 上执行。该检查不验证真实托盘宿主、用户确认密码库提示、Npcap/BPF 权限或校园联网。
 
-审查包引用和锁文件的变化，再重新执行锁定恢复与完整验证。不要关闭签名、校验和或 TLS 验证来绕过恢复错误。
+有意更新依赖时同步各项目的 `packages.lock.json`，再重新进行锁定恢复、构建与测试。更新命令可使用 `dotnet restore drcom4scutGUI.sln --use-lock-file --force-evaluate`，但不得在普通 CI 中用它悄悄改写依赖。不要关闭包签名、校验和或 TLS 校验来绕过恢复问题。
+
+## 系统适配与秘密存储
+
+配置路径见[账号与隐私](security.md#保存了哪些内容)。Windows 保留原有 CurrentUser DPAPI；macOS 使用登录 Keychain，Linux 使用 `/usr/bin/secret-tool` 访问当前桌面的 Secret Service。Unix 平台将随机 AES-GCM 密钥交给系统密码库保存，JSON 中只写密文，不创建配置旁的明文密钥文件。
+
+每个账号的“记住密码”决定是否保存密码。不保存时仍可记录用户名、网络字段和自动选项，本次输入只留在运行内存；加载此账号不应访问密码库恢复不存在的密码。系统密码库缺失、锁定、拒绝访问或密文损坏时报告错误，不回退到明文。
+
+登录启动只作用于当前用户：Windows 使用 `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`；macOS 使用 `~/Library/LaunchAgents/net.sealoong.drcom4scutGUI.plist`；Linux 使用 XDG 配置目录下的 `autostart/drcom4scutGUI.desktop`。启用 macOS 启动项只登记下次登录的 `RunAtLoad`，不额外启动当前会话。
+
+Linux 不自动隐藏主窗口，即使桌面 API 提供托盘对象，也不能据此假设存在可见托盘宿主。Windows、macOS 仅在托盘可用时收起；macOS 从菜单栏图标菜单恢复窗口。
 
 ## 与核心的接口
 
-GUI 只启动安装目录中的 `drcom4scut.exe`，要求核心 0.4.1 或更新版本。启动前检查核心版本和所需的命令行能力；不支持时报告错误，不回退到密码参数。
+GUI 要求核心 0.5.0 或更新版本。Windows 查找 `drcom4scut.exe`，Unix 查找 `drcom4scut`；只从安装位置查找，不搜索 `PATH`。macOS `.app` 优先使用应用包同级的核心；普通安装应采用此布局，避免修改已签名的应用包。
 
-- 密码通过 UTF-8、无 BOM 的重定向 stdin 发送一行，然后关闭输入。换行或 NUL 字符不属于这一接口可接受的密码。
-- 其他参数使用独立的 `ArgumentList` 条目。模式始终显式指定；有线模式显式选择 `--with-udp` 或 `--no-udp`。
-- 无线模式未允许 HTTP 时显式发送 `--require-https-portal`；允许时才发送 `--allow-insecure-portal`。URL 校验不接受凭据，公开查询字段以 [PortalOptions.cs](../drcom4scutGUI.Core/PortalOptions.cs) 为准。
-- 生命周期使用随机的 `\\.\pipe\drcom4scut-{guid}`，服务器限制为当前用户。核心读取控制消息；固定 UTF-8 `stop\n` 请求注销退出。GUI 请求停止后给核心有界退出时间，超时才终止所属进程。
-- 控制管道由父进程持有；断开或 EOF 使兼容核心进入停止流程。不要用无条件 kill 代替正常注销，也不要按名称终止其他核心实例。
-- stdout/stderr 必须并行读取。测试辅助核心同样明确使用 UTF-8，避免 Windows 控制台代码页改变 Unicode 密码的含义。
-- 每次认证创建独立的临时状态目录，通过 `--status-file` 交给本次核心。Windows 目录 ACL 只允许当前用户访问，Unix 目录权限为 `0700`；会话结束后清理。状态文件不用于存放账号密码。
-- 连接状态从该文件的 JSON 读取，经 `AuthenticationStatus` 验证 schema、所属子进程 PID、提供者及认证字段的一致性后，才通过类型化回调更新界面。无效、超大、残缺或其他进程的状态不会成为认证成功；stdout/stderr 仅作为诊断文本。
+- 密码通过 UTF-8、无 BOM 的私有重定向 stdin 发送一行，然后关闭输入；换行或 NUL 不属于此接口可接受的密码。密码不进入参数或环境变量。
+- 其他参数使用独立 `ArgumentList` 条目。模式始终显式指定；有线模式明确传 `--with-udp` 或 `--no-udp`。
+- 无线未允许 HTTP 时传 `--require-https-portal`；允许时才传 `--allow-insecure-portal`。URL 校验见 [PortalOptions.cs](https://github.com/SeaLoong/drcom4scutGUI/blob/master/drcom4scutGUI.Core/PortalOptions.cs)。
+- Windows 使用随机的 CurrentUserOnly 命名管道。Unix 在私有临时目录中创建 Unix-domain socket，通过 `--control-socket` 交给核心；目录 `0700`、socket `0600`，核心核对所有者及对端用户，路径为绝对路径且不超过 103 字节。
+- 固定 UTF-8 `stop\n` 请求注销退出；父进程关闭通道或崩溃产生的 EOF 同样进入停止流程。GUI 先给核心有界正常退出时间，超时才结束自己拥有的进程，不按进程名称杀死其他核心。
+- stdout/stderr 必须同时读取；日志只作诊断。测试辅助核心也明确使用 UTF-8，避免 Windows 控制台代码页影响凭据。
+- 每次认证使用独立私有状态目录与 `--status-file`，结束后清理。只在 JSON schema、所属 PID、提供者及认证字段一致时接受结构化状态；超大、残缺或其他进程的文件不会成为认证成功。
 
-认证成功状态按提供者区分：完整有线模式等待 UDP 心跳完成，仅 EAP 等待 802.1X 成功，无线模式等待门户确认在线。在线状态丢失后界面展示当前恢复阶段，保留核心自身的重连流程。不要把日志中的成功短语或进程仍在运行当作已经联网。
+完整有线模式等待 UDP 心跳完成，仅 EAP 等待 802.1X，无线等待门户确认在线。连接丢失时展示恢复阶段，保留核心重连；不以日志短语或进程存在代替在线状态。
 
 ## 本地发布包
 
+以下以原生 Linux x64 为例；在其他平台换成对应 RID 和输出目录。macOS `.app` 打包及签名检查应在 macOS 执行：
+
 ```sh
-dotnet publish drcom4scutGUI/drcom4scutGUI.csproj --configuration Release --runtime win-x64 --self-contained true --no-restore --output artifacts/publish/win-x64
-python .github/scripts/package_release.py --publish-dir artifacts/publish/win-x64
+dotnet restore drcom4scutGUI/drcom4scutGUI.csproj --runtime linux-x64 --locked-mode
+dotnet publish drcom4scutGUI/drcom4scutGUI.csproj --configuration Release --runtime linux-x64 --self-contained true --no-restore --output artifacts/publish/linux-x64
+python .github/scripts/package_release.py --runtime linux-x64 --publish-dir artifacts/publish/linux-x64
 ```
 
-产物在 `dist`，包含 GUI、运行时、README、`docs` 文档、许可证、来源元数据及对应 SHA-256 校验文件；不包含 Rust 核心或用户配置。打包器会检查目标平台、源版本和必需的自包含运行时文件，并拒绝账号文件或 `core.yml` 等配置文件。
+每个归档含外层版本/RID 目录、README、`docs`、许可证、[第三方声明](../THIRD-PARTY-NOTICES.md)、`BUILD-INFO.json` 和自包含程序，不包含 Rust 核心或用户配置。Windows 使用 ZIP，Linux/macOS 使用 tar.gz；macOS 的 `.app/Contents/MacOS` 放置自包含程序及其原生依赖，`.app/Contents/Resources` 另保留文档、许可和来源信息。其 `Info.plist` 声明应用版本和系统要求，使用 ad-hoc 签名并检查完整性，不宣称 Developer ID 签名或 Apple 公证。
 
-版本由 `Directory.Build.props` 统一声明。元数据记录源码提交和工作区是否有未提交修改；本地脏工作区的包不应当作干净提交的正式发布。
+平台清单驱动 ABI、PE/ELF/Mach-O 架构、源版本、发布 runtime 和所需文件检查，拒绝错误架构、缺失运行时、账号配置或符号链接。版本由 `Directory.Build.props` 统一声明；元数据记录完整源码 SHA 和工作区状态。本地脏工作区的包不当作干净提交的正式发布。
 
 ## CI、自动预发布和手动 Release
 
-[普通 CI](../.github/workflows/ci.yml)通过[共用验证流程](../.github/workflows/validate-build.yml)执行 Linux/Windows 共享测试、GUI 构建，并在 Windows 发布自包含产物。注意 CI 结论对应的具体提交，不能将先前通过的运行算作后续改动的验证。
+[普通 CI](https://github.com/SeaLoong/drcom4scutGUI/blob/master/.github/workflows/ci.yml)调用[共用验证流程](https://github.com/SeaLoong/drcom4scutGUI/blob/master/.github/workflows/validate-build.yml)。六个 RID 分别在相应操作系统和 CPU 的原生 runner 上执行共享测试、Headless UI 测试、构建、窗口启动与打包。Linux 的 Xvfb 窗口检查仍是自动化显示环境，不证明所有桌面、Wayland/XWayland 或托盘组合已验证。
 
-向本仓库 `master` 推送提交时，全部验证通过后自动发布开发预览。PR、其他分支和手动运行普通 CI 只做验证，不发布预览。预览复用同一次 CI 中的自包含包，检查 SHA-256、目标平台和干净源码提交后，再将上传完成的草稿公开为 **Pre-release**，不会替换正式版的 **Latest**。
+发布完整性检查要求平台清单中的六个包齐全，核对各包 SHA-256、runtime、源版本、完整源码提交和干净工作区后，统一生成 `SHA256SUMS`。不能把先前通过的运行当作后续提交的验证，也不能用某一平台包顶替另一平台产物。
 
-预览标签为 `preview-运行号-尝试号-提交前8位`，每次构建使用独立标签，不移动既有标签。压缩包和程序的版本仍由 `Directory.Build.props` 声明；通过标签、发布说明和包内 `BUILD-INFO.json` 可以追溯完整源码 SHA。自动预览保留最近 10 个，清理较旧预览时保留 Git 标签；正式版和其他发布不会被清理。
+向本仓库 `master` 推送提交且全部验证通过后，自动发布开发预览。PR、其他分支、fork 和手动运行普通 CI 只验证不发布。预览复用本次 CI 产物，先上传到草稿，核对远端文件名、大小和 SHA-256 后才公开为 **Pre-release**，不改变正式版 **Latest**。
 
-手动发布入口为 GitHub **Actions → Manual GUI release → Run workflow**。标签必须与 `Directory.Build.props` 的版本一致；默认创建草稿。流程重新验证源码、测试和包校验和，并要求包来自本次验证的干净提交；已有标签指向其他提交时会拒绝发布。
+预览标签为 `preview-运行号-尝试号-提交前8位`，固定到完整源码 SHA，不移动已有标签；程序版本仍由 manifest 声明。仅保留最近 10 个本流程公开预览，清理 Release 时保留 Git 标签；正式版、草稿和其他发布不被清理。
 
-自动预览与手动正式发布的安排参考 [Sensa 的 CI](https://github.com/SeaLoong/Sensa/blob/9dc7de27645fb484fa52711656bf31b05ff3f84a/.github/workflows/ci.yml)和[发布流程](https://github.com/SeaLoong/Sensa/blob/9dc7de27645fb484fa52711656bf31b05ff3f84a/.github/workflows/release.yml)。
+正式发布仍由 **Actions → Manual GUI release → Run workflow** 手动触发。标签与 `Directory.Build.props` 版本一致，例如 `v3.1.0`，默认创建草稿。流程重新验证源码及全部六个包，拒绝覆盖指向其他提交的已有标签。
 
-原生 Windows CI 可以验证编译、共享逻辑和系统密码保护，但真实 UI 交互、驱动捕获及校园认证仍需要目标环境验证。不要把 Linux 交叉构建、模拟服务端或一个 PID 当作这些检查的替代。
+自动预览与手动正式发布的安排参考 [Sensa 的 CI](https://github.com/SeaLoong/Sensa/blob/9dc7de27645fb484fa52711656bf31b05ff3f84a/.github/workflows/ci.yml)和[发布流程](https://github.com/SeaLoong/Sensa/blob/9dc7de27645fb484fa52711656bf31b05ff3f84a/.github/workflows/release.yml)。实际校园认证、抓包权限、密码库交互和长期在线仍需在目标环境验证。
