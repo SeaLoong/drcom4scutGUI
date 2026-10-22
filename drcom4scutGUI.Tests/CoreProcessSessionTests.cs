@@ -1,0 +1,169 @@
+using System.Collections.Concurrent;
+using System.Diagnostics;
+using System.Security.Cryptography;
+using System.Text;
+using System.Text.Json;
+using Xunit;
+
+namespace drcom4scutGUI.Tests;
+
+public sealed class CoreProcessSessionTests
+{
+    private static string Helper => System.IO.Path.Combine(AppContext.BaseDirectory, "helpers", OperatingSystem.IsWindows() ? "FakeCore.exe" : "FakeCore");
+
+    [Fact]
+    public async Task CapabilityProbeAndDoctorNeedNoStoredCredential()
+    {
+        var session = new CoreProcessSession(Helper);
+        Assert.Equal("drcom4scut 0.4.0", await session.VerifyCoreAsync(TestContext.Current.CancellationToken));
+        Assert.Contains("no real capture opened", await session.DoctorAsync(TestContext.Current.CancellationToken));
+    }
+
+    [Fact]
+    public async Task LegacyCoreIsRefusedInsteadOfFallingBackToPasswordArguments()
+    {
+        string renamed = Path.Combine(Path.GetDirectoryName(Helper)!, "Legacy" + Guid.NewGuid().ToString("N") + (OperatingSystem.IsWindows() ? ".exe" : ""));
+        File.Copy(Helper, renamed);
+        try
+        {
+            var error = await Assert.ThrowsAsync<InvalidOperationException>(() => new CoreProcessSession(renamed).VerifyCoreAsync(TestContext.Current.CancellationToken));
+            Assert.Contains("0.4.0", error.Message);
+            Assert.Contains("不会回退", error.Message);
+        }
+        finally { File.Delete(renamed); }
+    }
+
+    [Fact]
+    public void ProcessArgumentsKeepEachValueSeparateAndNeverContainPassword()
+    {
+        var options = new CoreLaunchOptions("user \" --password bad", "synthetic-secret", "02:00:00:00:00:01", "192.0.2.1", "configuration with spaces.yml");
+        var info = CoreProcessSession.CreateStartInfo(Helper, options);
+        Assert.Equal("", info.Arguments);
+        Assert.Contains("--password-stdin", info.ArgumentList);
+        Assert.DoesNotContain("--password", info.ArgumentList);
+        Assert.DoesNotContain("-p", info.ArgumentList);
+        Assert.DoesNotContain(options.Password, info.ArgumentList);
+        string[] args = [.. info.ArgumentList];
+        Assert.Equal(options.Username, args[Array.IndexOf(args, "--username") + 1]);
+        Assert.Equal(options.ConfigPath, args[Array.IndexOf(args, "--config") + 1]);
+        Assert.False(info.UseShellExecute);
+        Assert.True(info.RedirectStandardInput);
+        Assert.True(info.RedirectStandardOutput);
+        Assert.True(info.RedirectStandardError);
+    }
+
+    [Fact]
+    public void LaunchOptionsFormattingAndSerializationCannotExposePassword()
+    {
+        var options = new CoreLaunchOptions("student", "private-runtime-options-secret");
+        Assert.DoesNotContain(options.Password, options.ToString());
+        Assert.Contains("redacted", options.ToString());
+        string json = JsonSerializer.Serialize(options);
+        Assert.DoesNotContain(options.Password, json);
+        Assert.DoesNotContain("\"Password\"", json);
+        Assert.Contains("student", json);
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void EapOnlySelectionAddsExactlyTheIntendedCoreFlag(bool noUdp)
+    {
+        var options = new CoreLaunchOptions("student", "secret", NoUdp: noUdp);
+        var info = CoreProcessSession.CreateStartInfo(Helper, options);
+        Assert.Equal(noUdp ? 1 : 0, info.ArgumentList.Count(argument => argument == "--no-udp"));
+        Assert.Contains("--password-stdin", info.ArgumentList);
+        Assert.DoesNotContain(options.Password, info.ArgumentList);
+    }
+
+    [Fact]
+    public async Task RealChildReceivesSecretOnlyThroughStdinAndBothStreamsAreDrained()
+    {
+        var output = new ConcurrentQueue<string>();
+        var error = new ConcurrentQueue<string>();
+        var options = new CoreLaunchOptions("username with \"quotes\" and spaces", "Unicode🔐 space\\\"secret");
+        int code = await new CoreProcessSession(Helper).RunAsync(options, output.Enqueue, error.Enqueue, TestContext.Current.CancellationToken);
+        Assert.Equal(17, code);
+        string expected = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(options.Password)));
+        Assert.Contains("stdin-sha256:" + expected, output);
+        Assert.Contains("stderr-drained", error);
+        string[] args = JsonSerializer.Deserialize<string[]>(output.First())!;
+        Assert.DoesNotContain(options.Password, args);
+        Assert.Contains(options.Username, args);
+        Assert.DoesNotContain(options.Password, string.Join("\n", output));
+    }
+
+    [Fact]
+    public async Task MisbehavingCoreCannotExposeSubmittedPasswordInGuiLogs()
+    {
+        var output = new ConcurrentQueue<string>();
+        var error = new ConcurrentQueue<string>();
+        string password = "do-not-display-synthetic-secret";
+        int code = await new CoreProcessSession(Helper).RunAsync(new CoreLaunchOptions("echo-password", password), output.Enqueue, error.Enqueue, TestContext.Current.CancellationToken);
+        Assert.Equal(17, code);
+        Assert.DoesNotContain(password, string.Join("\n", output));
+        Assert.DoesNotContain(password, string.Join("\n", error));
+        Assert.Contains(output, line => line.StartsWith("external-core-echo:", StringComparison.Ordinal) && line.Contains("已隐藏", StringComparison.Ordinal));
+        Assert.Contains(error, line => line.StartsWith("external-error-echo:", StringComparison.Ordinal) && line.Contains("已隐藏", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task AlreadyCanceledStartDoesNotAttemptToLaunchMissingExecutable()
+    {
+        using var cancellation = new CancellationTokenSource();
+        cancellation.Cancel();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => new CoreProcessSession("missing-core").RunAsync(new CoreLaunchOptions("student", "secret"), _ => { }, _ => { }, cancellation.Token));
+    }
+
+    [Fact]
+    public async Task SimultaneousLargeStdoutAndStderrCannotDeadlock()
+    {
+        var output = new ConcurrentQueue<string>();
+        var error = new ConcurrentQueue<string>();
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        deadline.CancelAfter(TimeSpan.FromSeconds(15));
+        int code = await new CoreProcessSession(Helper).RunAsync(new CoreLaunchOptions("flood-output", "secret"), output.Enqueue, error.Enqueue, deadline.Token);
+        Assert.Equal(17, code);
+        Assert.Contains("stdout-line-4999", output);
+        Assert.Contains("stderr-line-4999", error);
+    }
+
+    [Fact]
+    public async Task CancellationKillsOnlyTheOwnedChildAndAwaitsItsExit()
+    {
+        using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        var ready = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
+        Task<int> run = new CoreProcessSession(Helper).RunAsync(new CoreLaunchOptions("wait-for-cancellation", "secret"), line =>
+        {
+            if (line.StartsWith("ready:", StringComparison.Ordinal)) ready.TrySetResult(int.Parse(line[6..]));
+        }, _ => { }, cancellation.Token);
+        int pid = await ready.Task.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+        cancellation.Cancel();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(async () => await run.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken));
+        try
+        {
+            using var child = Process.GetProcessById(pid);
+            Assert.True(child.HasExited);
+        }
+        catch (ArgumentException) { } // The OS has already reaped the owned child.
+    }
+
+    [Theory]
+    [InlineData("line1\nline2")]
+    [InlineData("line1\rline2")]
+    public async Task MultilinePasswordIsRejectedBeforeLaunchingProcess(string password)
+    {
+        var output = new ConcurrentQueue<string>();
+        await Assert.ThrowsAsync<ArgumentException>(() => new CoreProcessSession(Helper).RunAsync(new CoreLaunchOptions("student", password), output.Enqueue, _ => { }, TestContext.Current.CancellationToken));
+        Assert.Empty(output);
+    }
+
+    [Fact]
+    public async Task MissingExecutableProducesActionableFailureWithoutEchoingSecret()
+    {
+        using var directory = new TemporaryDirectory();
+        string secret = "synthetic-do-not-echo";
+        Exception error = await Assert.ThrowsAsync<InvalidOperationException>(() => new CoreProcessSession(directory.File("missing-core")).RunAsync(new CoreLaunchOptions("student", secret), _ => { }, _ => { }, TestContext.Current.CancellationToken));
+        Assert.DoesNotContain(secret, error.ToString());
+    }
+}

@@ -398,3 +398,13 @@ FodyWeavers.xsd
 
 # JetBrains Rider
 *.sln.iml
+# Local account configuration (including obsolete plaintext formats)
+gui.json
+drcom4scutGUI.json
+config.json
+/dist/
+
+# Local CI/test artifacts and Python caches
+/artifacts/
+__pycache__/
+*.py[cod]

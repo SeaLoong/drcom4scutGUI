@@ -1,435 +1,384 @@
-﻿using System;
-using System.Diagnostics;
+using System;
+using System.ComponentModel;
+using System.IO;
 using System.Net;
 using System.Net.NetworkInformation;
-using System.Text;
-using System.Text.RegularExpressions;
+using System.Net.Sockets;
 using System.Threading;
+using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Forms;
+using System.Windows.Media;
 using MessageBox = System.Windows.MessageBox;
 
-namespace drcom4scutGUI
+namespace drcom4scutGUI;
+
+public partial class MainWindow : Window
 {
-    public partial class MainWindow : Window
+    private readonly ConfigurationStore store;
+    private readonly CoreProcessSession core;
+    private readonly CancellationTokenSource lifetime = new();
+    private readonly DiagnosticsBuffer diagnostics = new();
+    private Configuration config = new();
+    private Account? current;
+    private NotifyIcon? tray;
+    private System.Drawing.Icon? trayIcon;
+    private CancellationTokenSource? authentication;
+    private Task<int>? sessionTask;
+    private bool loading;
+    private bool closing;
+    private bool closeAllowed;
+    private bool authenticated;
+    private int sessionGeneration;
+    private string coreVersion = "";
+    private static string GuiVersion => typeof(MainWindow).Assembly.GetName().Version?.ToString(3) ?? "unknown";
+
+    public MainWindow()
     {
-        private Configuration config = null;
-        private Account current = null;
-        private bool loading = false;
-        private string version = "";
-        private Process process = null;
-        private bool success = false;
-        private Thread thread = null;
+        InitializeComponent();
+        string directory = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "drcom4scutGUI");
+        string legacy = Path.Combine(AppContext.BaseDirectory, "drcom4scutGUI.json");
+        if (!File.Exists(legacy)) legacy = Path.Combine(Environment.CurrentDirectory, "gui.json");
+        store = new ConfigurationStore(Path.Combine(directory, "config.json"), new DpapiSecretProtector(), legacy);
+        core = new CoreProcessSession(Path.Combine(AppContext.BaseDirectory, "drcom4scut.exe"));
+        DependencyPropertyDescriptor.FromProperty(System.Windows.Controls.ComboBox.TextProperty, typeof(System.Windows.Controls.ComboBox))
+            .AddValueChanged(nameComboBox, NameComboBox_TextChanged);
+    }
 
-        public MainWindow()
+    private async void Window_Loaded(object sender, RoutedEventArgs e)
+    {
+        MaxHeight = Math.Max(400, SystemParameters.WorkArea.Height - 40);
+        loginButton.IsEnabled = false;
+        try
         {
-            InitializeComponent();
-            System.ComponentModel.DependencyPropertyDescriptor.FromProperty(System.Windows.Controls.ComboBox.TextProperty, typeof(System.Windows.Controls.ComboBox))
-                .AddValueChanged(this.nameComboBox, NameComboBox_TextChanged);
-        }
-
-        private void ShowAndActive()
-        {
-            this.Show();
-            this.WindowState = WindowState.Normal;
-            this.Activate();
-        }
-
-        NotifyIcon notifyIcon;
-        private void InitTray()
-        {
-            ContextMenuStrip menuStrip = new ContextMenuStrip();
-            menuStrip.Items.Add(new ToolStripMenuItem("主页", null, (sender, e) => { this.ShowAndActive(); }));
-            menuStrip.Items.Add(new ToolStripMenuItem("退出", null, (sender, e) => { this.Close(); }));
-            this.notifyIcon = new NotifyIcon()
-            {
-                ContextMenuStrip = menuStrip,
-                Icon = drcom4scutGUI.Resources.DrClient,
-                Text = this.Title,
-                Visible = true
-            };
-            notifyIcon.MouseClick += (sender, e) => { if (e.Button == MouseButtons.Left) { this.ShowAndActive(); } };
-        }
-
-        private void InitNetworkInterface()
-        {
-            this.macComboBox.Items.Add(new ComboBoxItem { Content = string.Empty, Tag = string.Empty });
-            NetworkInterface[] nics = NetworkInterface.GetAllNetworkInterfaces();
-            foreach (NetworkInterface adapter in nics)
-            {
-                if (adapter.NetworkInterfaceType != NetworkInterfaceType.Ethernet)
-                    continue;
-                string mac = BitConverter.ToString(adapter.GetPhysicalAddress().GetAddressBytes()).Replace('-', ':');
-                this.macComboBox.Items.Add(new ComboBoxItem
-                {
-                    Content = $"{adapter.Name} ({mac})",
-                    Tag = mac,
-                    ToolTip = adapter.Description
-                });
-            }
-            this.macComboBox.SelectedValue = config.Mac;
-            if (this.macComboBox.SelectedIndex < 0)
-            {
-                this.macComboBox.SelectedIndex = this.macComboBox.Items.Add(
-                    new System.Windows.Controls.ComboBoxItem { Content = $"({config.Mac})", Tag = config.Mac });
-            }
-        }
-
-        private void InitUI()
-        {
-            InitNetworkInterface();
-            loading = true;
-            foreach (Account account in config.Accounts)
-                this.nameComboBox.Items.Add(account.Name);
-            current = config.Find(config.Account);
-            this.nameComboBox.Text = current?.Name ?? "";
-            ShowAccount(current);
-            this.autoCheckBox.IsChecked = config.Auto;
-            loading = false;
-        }
-
-        private void LoadConfig()
-        {
-            try
-            {
-                config = Configuration.Load();
-            }
-            catch (Exception e)
+            try { config = store.Load(); }
+            catch (Exception error)
             {
                 config = new Configuration();
-                MessageBox.Show($"读取配置文件失败，将使用空配置！\n{Configuration.FilePath}\n{e.Message}",
-                    "警告", MessageBoxButton.OK, MessageBoxImage.Warning);
+                MessageBox.Show(error.Message + "\n原文件已保留。重新输入账号并认证时，将用新的加密配置替换它。\n" + store.FilePath,
+                    "账号配置未能读取", MessageBoxButton.OK, MessageBoxImage.Warning);
             }
-        }
-
-        private void ShowAccount(Account account)
-        {
-            current = account;
-            this.deleteButton.IsEnabled = account != null;
-            this.passwordTextBox.Password = account?.Password ?? "";
-            this.ipTextBox.Text = account?.IP ?? "";
-        }
-
-        private void NameComboBox_TextChanged(object sender, EventArgs e)
-        {
-            string username = this.nameComboBox.Text.Trim();
-            if (loading)
-                return;
-            Account account = config.Find(username);
-            if (account != current)
-            {
-                if (current != null)
-                {
-                    SaveInput();
-                }
-                ShowAccount(account);
-            }
-        }
-
-        private void DeleteButton_Click(object sender, RoutedEventArgs e)
-        {
-            if (current == null) return;
-            if (MessageBox.Show($"确定删除账号 {current.Name} 吗？", "删除账号", MessageBoxButton.YesNo, MessageBoxImage.Question) != MessageBoxResult.Yes)
-                return;
-            loading = true;
-            config.Accounts.Remove(current);
-            if (config.Account == current.Name)
-            {
-                config.Account = "";
-            }
-            this.nameComboBox.Items.Remove(current.Name);
-            this.nameComboBox.Text = "";
-            ShowAccount(null);
-            loading = false;
-            SaveConfig();
-        }
-
-        private void IpTextBox_TextChanged(object sender, System.Windows.Controls.TextChangedEventArgs e)
-        {
-            string ip = this.ipTextBox.Text.Trim();
-            if (ip.Length == 0 || IPAddress.TryParse(ip, out IPAddress ipaddress))
-            {
-                this.ipTextBox.ClearValue(System.Windows.Controls.Control.BackgroundProperty);
-                this.ipTextBox.ToolTip = null;
-            }
-            else
-            {
-                this.ipTextBox.Background = System.Windows.Media.Brushes.MistyRose;
-                this.ipTextBox.ToolTip = "IP地址格式不正确，不需要指定时请留空";
-            }
-        }
-
-        private void SaveInput(bool all = false)
-        {
-            bool changed = false;
-            string username = this.nameComboBox.Text.Trim();
-            string password = this.passwordTextBox.Password;
-            string ip = this.ipTextBox.Text.Trim();
-            if (ip.Length == 0)
-            {
-                ip = "";
-            }
-            else if (IPAddress.TryParse(ip, out IPAddress ipaddress))
-            {
-                ip = ipaddress.ToString();
-            }
-            else
-            {
-                ip = current?.IP ?? "";
-            }
-            if (current == null && username.Length > 0 && password.Length > 0)
-            {
-                changed = true;
-                current = new Account { Name = username, Password = password, IP = ip };
-                config.Accounts.Add(current);
-                config.Accounts.Sort();
-                this.nameComboBox.Items.Add(username);
-                this.deleteButton.IsEnabled = true;
-            }
-            else if (current != null && (current.Password != password || current.IP != ip))
-            {
-                changed = true;
-                current.Password = password;
-                current.IP = ip;
-            }
-            if (all)
-            {
-                string mac = (string)this.macComboBox.SelectedValue ?? "";
-                bool auto = this.autoCheckBox.IsChecked == true;
-                if (config.Mac != mac || config.Account != current.Name || config.Auto != auto)
-                {
-                    changed = true;
-                    config.Mac = mac;
-                    config.Account = current.Name;
-                    config.Auto = auto;
-                }
-            }
-            if (changed)
-                SaveConfig();
-        }
-
-        private void SaveConfig()
-        {
-            try
-            {
-                config.Save();
-            }
-            catch (Exception e)
-            {
-                MessageBox.Show($"保存配置文件失败！\n{Configuration.FilePath}\n{e.Message}",
-                    "错误", MessageBoxButton.OK, MessageBoxImage.Error);
-            }
-        }
-
-        private static void KillCoreProcess()
-        {
-            foreach (Process process in Process.GetProcessesByName("drcom4scut"))
-            {
-                try { process.Kill(); }
-                catch (Exception) { }
-            }
-        }
-
-        private static Process BuildCoreProcess(string arguments)
-        {
-            return new Process
-            {
-                StartInfo = new ProcessStartInfo("drcom4scut.exe", arguments)
-                {
-                    UseShellExecute = false,
-                    CreateNoWindow = true,
-                    RedirectStandardOutput = true,
-                    RedirectStandardError = true
-                }
-            };
-        }
-
-        private void GetCoreVersion()
-        {
-            Process process = BuildCoreProcess("--version");
-            Regex versionRegex = new(@"drcom4scut\s*(\d\S*)");
-            try
-            {
-                process.Start();
-                version = versionRegex.Match(process.StandardOutput.ReadToEnd()).Groups[1].Value;
-                process.WaitForExit();
-            }
-            catch (Exception) { }
-        }
-
-        private void Window_Loaded(object sender, RoutedEventArgs e)
-        {
-            GetCoreVersion();
-            KillCoreProcess();
-            if (version.Length == 0)
-            {
-                this.IsEnabled = false;
-                MessageBox.Show("未找到核心程序 drcom4scut.exe，无法使用！", "错误", MessageBoxButton.OK, MessageBoxImage.Error);
-                System.Windows.Application.Current.Shutdown(0);
-                return;
-            }
-            else
-            {
-                this.Title = $"drcom4scutGUI ({version})";
-            }
-            LoadConfig();
-            InitTray();
             InitUI();
-            if (current != null && config.Auto)
+            InitTray();
+            coreVersion = await core.VerifyCoreAsync(lifetime.Token);
+            Title = $"drcom4scutGUI {GuiVersion} — {coreVersion}";
+            if (tray is not null) tray.Text = $"drcom4scutGUI {GuiVersion}";
+            label.Text = "已就绪。密码通过专用管道传递，保存的密码仅当前 Windows 用户可解密。";
+            loginButton.IsEnabled = true;
+            if (current is not null && config.Auto) await StartCoreAsync();
+        }
+        catch (OperationCanceledException) when (lifetime.IsCancellationRequested) { }
+        catch (Exception error)
+        {
+            label.Text = error.Message;
+            if (!closing) MessageBox.Show(error.Message + "\n配置路径：" + store.FilePath, "初始化失败", MessageBoxButton.OK, MessageBoxImage.Warning);
+        }
+    }
+
+    private void InitUI()
+    {
+        loading = true;
+        macComboBox.Items.Add(new ComboBoxItem { Content = "自动选择", Tag = "" });
+        foreach (NetworkInterface adapter in NetworkInterface.GetAllNetworkInterfaces())
+        {
+            if (adapter.NetworkInterfaceType is not (NetworkInterfaceType.Ethernet or NetworkInterfaceType.GigabitEthernet or NetworkInterfaceType.FastEthernetFx or NetworkInterfaceType.FastEthernetT or NetworkInterfaceType.Wireless80211)) continue;
+            byte[] address = adapter.GetPhysicalAddress().GetAddressBytes();
+            if (address.Length != 6) continue;
+            string mac = BitConverter.ToString(address).Replace('-', ':');
+            macComboBox.Items.Add(new ComboBoxItem { Content = $"{adapter.Name} ({mac})", Tag = mac, ToolTip = adapter.Description });
+        }
+        macComboBox.SelectedValue = config.Mac;
+        if (macComboBox.SelectedIndex < 0)
+            macComboBox.SelectedIndex = macComboBox.Items.Add(new ComboBoxItem { Content = config.Mac, Tag = config.Mac });
+        foreach (Account account in config.Accounts) nameComboBox.Items.Add(account.Name);
+        current = config.Find(config.Account);
+        nameComboBox.Text = current?.Name ?? "";
+        ShowAccount(current);
+        autoCheckBox.IsChecked = config.Auto;
+        modeComboBox.SelectedValue = config.Mode == "portal" ? "portal" : config.NoUdp ? "eap-only" : "eap";
+        portalBaseTextBox.Text = config.PortalBase;
+        portalApiTextBox.Text = config.PortalApi;
+        portalAcIpTextBox.Text = config.PortalAcIp;
+        portalClientIpTextBox.Text = config.PortalClientIp;
+        allowHttpCheckBox.IsChecked = config.AllowHttp;
+        UpdateModeUI();
+        startupCheckBox.IsChecked = WindowsStartup.IsEnabled();
+        loading = false;
+    }
+
+    private void InitTray()
+    {
+        ContextMenuStrip menu = new();
+        menu.Items.Add(new ToolStripMenuItem("打开", null, (_, _) => ShowAndActivate()));
+        menu.Items.Add(new ToolStripMenuItem("停止认证", null, async (_, _) => await StopCoreAsync()));
+        menu.Items.Add(new ToolStripMenuItem("退出", null, (_, _) => Close()));
+        using (Stream stream = System.Windows.Application.GetResourceStream(new Uri("pack://application:,,,/DrClient.ico")).Stream)
+        using (System.Drawing.Icon source = new(stream)) trayIcon = (System.Drawing.Icon)source.Clone();
+        tray = new NotifyIcon { ContextMenuStrip = menu, Icon = trayIcon, Text = $"drcom4scutGUI {GuiVersion}", Visible = true };
+        tray.MouseClick += (_, args) => { if (args.Button == MouseButtons.Left) ShowAndActivate(); };
+    }
+
+    private void ShowAndActivate()
+    {
+        Show();
+        WindowState = WindowState.Normal;
+        Activate();
+    }
+
+    private void ShowAccount(Account? account)
+    {
+        current = account;
+        deleteButton.IsEnabled = account is not null;
+        passwordTextBox.Password = account?.Password ?? "";
+        ipTextBox.Text = account?.IP ?? "";
+    }
+
+    private void NameComboBox_TextChanged(object? sender, EventArgs e)
+    {
+        if (loading) return;
+        Account? account = config.Find(nameComboBox.Text.Trim());
+        if (account == current) return;
+        if (current is not null) SaveInput();
+        ShowAccount(account);
+    }
+
+    private bool SaveInput(bool all = false)
+    {
+        string username = nameComboBox.Text.Trim();
+        string password = passwordTextBox.Password;
+        string ip = ipTextBox.Text.Trim();
+        if (ip.Length > 0 && (!IPAddress.TryParse(ip, out IPAddress? entered) || entered.AddressFamily != AddressFamily.InterNetwork)) ip = current?.IP ?? "";
+        if (current is null && username.Length > 0 && password.Length > 0)
+        {
+            current = new Account { Name = username, Password = password, IP = ip };
+            config.Accounts.Add(current);
+            config.Accounts.Sort();
+            if (!nameComboBox.Items.Contains(username)) nameComboBox.Items.Add(username);
+        }
+        else if (current is not null)
+        {
+            current.Password = password;
+            current.IP = ip;
+        }
+        if (all)
+        {
+            config.Account = current?.Name ?? "";
+            config.Mac = macComboBox.SelectedValue as string ?? "";
+            config.Auto = autoCheckBox.IsChecked == true;
+            string selected = modeComboBox.SelectedValue as string ?? "eap";
+            config.Mode = selected == "portal" ? "portal" : "eap";
+            config.NoUdp = selected == "eap-only";
+            config.PortalBase = portalBaseTextBox.Text.Trim();
+            config.PortalApi = portalApiTextBox.Text.Trim();
+            config.PortalAcIp = portalAcIpTextBox.Text.Trim();
+            config.PortalClientIp = portalClientIpTextBox.Text.Trim();
+            config.AllowHttp = allowHttpCheckBox.IsChecked == true;
+        }
+        try { store.Save(config); return true; }
+        catch (Exception error)
+        {
+            MessageBox.Show("配置未能安全保存，认证尚未启动。\n" + error.Message, "保存失败", MessageBoxButton.OK, MessageBoxImage.Error);
+            return false;
+        }
+    }
+
+    private void DeleteButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (current is null || MessageBox.Show($"删除账号 {current.Name}？", "删除账号", MessageBoxButton.YesNo, MessageBoxImage.Question) != MessageBoxResult.Yes) return;
+        loading = true;
+        config.Accounts.Remove(current);
+        nameComboBox.Items.Remove(current.Name);
+        if (config.Account == current.Name) config.Account = "";
+        nameComboBox.Text = "";
+        ShowAccount(null);
+        loading = false;
+        SaveInput();
+    }
+
+    private void IpTextBox_TextChanged(object sender, TextChangedEventArgs e)
+    {
+        string text = ipTextBox.Text.Trim();
+        bool valid = text.Length == 0 || IPAddress.TryParse(text, out IPAddress? ip) && ip.AddressFamily == AddressFamily.InterNetwork;
+        if (valid) ipTextBox.ClearValue(System.Windows.Controls.Control.BackgroundProperty);
+        else ipTextBox.Background = Brushes.MistyRose;
+        ipTextBox.ToolTip = valid ? null : "请输入 IPv4 地址，不指定时留空。";
+    }
+
+    private async void LoginButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (sessionTask is null) await StartCoreAsync();
+        else await StopCoreAsync();
+    }
+
+    private async Task StartCoreAsync()
+    {
+        if (sessionTask is not null || closing) return;
+        string username = nameComboBox.Text.Trim();
+        string password = passwordTextBox.Password;
+        string ip = ipTextBox.Text.Trim();
+        if (password.IndexOfAny(['\r', '\n', '\0']) >= 0)
+        {
+            MessageBox.Show("密码不能包含换行或 NUL 字符。", "密码格式不正确", MessageBoxButton.OK, MessageBoxImage.Warning);
+            return;
+        }
+        if (username.Length == 0 || password.Length == 0)
+        {
+            MessageBox.Show("请输入账号和密码。", "输入不完整", MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
+        if (ip.Length > 0 && (!IPAddress.TryParse(ip, out IPAddress? address) || address.AddressFamily != AddressFamily.InterNetwork))
+        {
+            MessageBox.Show("请输入 IPv4 地址，不指定时留空。", "地址不正确", MessageBoxButton.OK, MessageBoxImage.Warning);
+            return;
+        }
+        if (!SaveInput(all: true)) return;
+        authenticated = false;
+        authentication = CancellationTokenSource.CreateLinkedTokenSource(lifetime.Token);
+        SetUIEnabled(false);
+        label.Text = config.Mode == "portal" ? "正在进行无线门户认证…" : "正在进行 802.1X 认证…";
+        var options = new CoreLaunchOptions(username, password, config.Mac, ip,
+            Path.Combine(Path.GetDirectoryName(store.FilePath)!, "core.yml"), config.NoUdp,
+            config.Mode, config.PortalBase, config.PortalApi, config.PortalAcIp, config.PortalClientIp, config.AllowHttp);
+        int generation = ++sessionGeneration;
+        try
+        {
+            sessionTask = core.RunAsync(options, line => ReceiveLine(line, options.Mode, options.NoUdp, generation), line => ReceiveLine(line, options.Mode, options.NoUdp, generation), authentication.Token);
+            int code = await sessionTask;
+            label.Text = $"核心程序已退出（代码 {code}）。可使用“自检”查看环境。";
+        }
+        catch (OperationCanceledException) when (authentication.IsCancellationRequested) { label.Text = "已停止。"; }
+        catch (Exception error) { label.Text = error.Message; ShowAndActivate(); }
+        finally
+        {
+            sessionTask = null;
+            authentication.Dispose();
+            authentication = null;
+            authenticated = false;
+            if (!closing) SetUIEnabled(true);
+        }
+    }
+
+    private void ReceiveLine(string line, string mode, bool eapOnly, int generation)
+    {
+        diagnostics.Add(line);
+        Dispatcher.BeginInvoke(new Action(() =>
+        {
+            if (closing || generation != sessionGeneration || sessionTask is null) return;
+            logTextBox.Text = diagnostics.Export(current?.Name ?? "", current?.Password ?? "");
+            logTextBox.ScrollToEnd();
+            if (authentication?.IsCancellationRequested == true) return;
+            if (AuthenticationStatus.IsSuccessLine(mode, eapOnly, line)) MarkAuthenticated(mode, eapOnly);
+            else if (mode == "eap" && line.Contains("802.1X Authorization success!", StringComparison.Ordinal))
+                label.Text = "802.1X 已通过，正在建立 UDP 会话…";
+            else if (line.Contains("[ERROR]", StringComparison.Ordinal) || line.StartsWith("drcom4scut:", StringComparison.Ordinal))
             {
-                StartCore();
+                label.Text = "连接出现问题，核心程序将按配置重试。详情见日志。";
+                if (authenticated) { authenticated = false; ShowAndActivate(); }
             }
-        }
+        }));
+    }
 
-        private void Window_Closing(object sender, System.ComponentModel.CancelEventArgs e)
+    private void MarkAuthenticated(string mode, bool eapOnly)
+    {
+        label.Text = mode == "portal" ? "无线门户已确认在线。" : eapOnly ? "802.1X 认证成功（仅 EAP）。" : "认证和 UDP 心跳均成功。";
+        if (!authenticated) { authenticated = true; WindowState = WindowState.Minimized; }
+    }
+
+    private async Task StopCoreAsync()
+    {
+        Task<int>? running = sessionTask;
+        if (!closing) { label.Text = "正在注销并停止…"; loginButton.IsEnabled = false; }
+        authentication?.Cancel();
+        if (running is not null)
         {
-            this.notifyIcon?.Visible = false;
-            KillCoreProcessOwned();
+            try { await running; }
+            catch (OperationCanceledException) { }
+            catch (Exception error) { diagnostics.Add(error.Message); }
         }
+        if (!closing) { label.Text = "已停止。"; loginButton.IsEnabled = true; ShowAndActivate(); }
+    }
 
-        private void Window_StateChanged(object sender, EventArgs e)
+    private void SetUIEnabled(bool enabled)
+    {
+        loginButton.Content = enabled ? "认证" : "停止";
+        loginButton.Background = enabled ? Brushes.ForestGreen : Brushes.OrangeRed;
+        macComboBox.IsEnabled = enabled;
+        nameComboBox.IsEnabled = enabled;
+        passwordTextBox.IsEnabled = enabled;
+        ipTextBox.IsEnabled = enabled;
+        autoCheckBox.IsEnabled = enabled;
+        modeComboBox.IsEnabled = enabled;
+        portalPanel.IsEnabled = enabled;
+        deleteButton.IsEnabled = enabled && current is not null;
+    }
+
+    private async void DoctorButton_Click(object sender, RoutedEventArgs e)
+    {
+        doctorButton.IsEnabled = false;
+        try
         {
-            if (this.WindowState == WindowState.Minimized)
-            {
-                this.Hide();
-            }
+            string result = await core.DoctorAsync(lifetime.Token);
+            diagnostics.Add(result);
+            logTextBox.Text = diagnostics.Export(current?.Name ?? "", current?.Password ?? "");
+            MessageBox.Show(result, "环境自检", MessageBoxButton.OK, MessageBoxImage.Information);
         }
+        catch (OperationCanceledException) when (lifetime.IsCancellationRequested) { }
+        catch (Exception error) { if (!closing) MessageBox.Show(error.Message, "自检失败", MessageBoxButton.OK, MessageBoxImage.Warning); }
+        finally { doctorButton.IsEnabled = true; }
+    }
 
-        private void SetUIEnabled(bool enable)
+    private void ExportButton_Click(object sender, RoutedEventArgs e)
+    {
+        Microsoft.Win32.SaveFileDialog dialog = new() { FileName = "drcom4scut-diagnostics.txt", Filter = "文本文件|*.txt" };
+        if (dialog.ShowDialog(this) != true) return;
+        try { File.WriteAllText(dialog.FileName, $"GUI {GuiVersion} / " + coreVersion + Environment.NewLine + diagnostics.Export(current?.Name ?? "", current?.Password ?? "")); }
+        catch (Exception error) { MessageBox.Show(error.Message, "导出失败", MessageBoxButton.OK, MessageBoxImage.Warning); }
+    }
+
+    private void UpdateModeUI()
+    {
+        portalPanel.Visibility = modeComboBox.SelectedValue as string == "portal" ? Visibility.Visible : Visibility.Collapsed;
+    }
+
+    private void ModeComboBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        UpdateModeUI();
+        if (!loading && !closing) SaveInput(all: true);
+    }
+
+    private void Preferences_Changed(object sender, RoutedEventArgs e)
+    {
+        if (!loading && !closing) SaveInput(all: true);
+    }
+
+    private void StartupCheckBox_Changed(object sender, RoutedEventArgs e)
+    {
+        if (loading) return;
+        try { WindowsStartup.SetEnabled(startupCheckBox.IsChecked == true); }
+        catch (Exception error)
         {
-            this.loginButton.Content = enable ? "认证" : "停止";
-            this.loginButton.Background = enable ? System.Windows.Media.Brushes.ForestGreen : System.Windows.Media.Brushes.OrangeRed;
-            this.macComboBox.IsEnabled = enable;
-            this.nameComboBox.IsEnabled = enable;
-            this.deleteButton.IsEnabled = enable && current != null;
-            this.passwordTextBox.IsEnabled = enable;
-            this.ipTextBox.IsEnabled = enable;
-            this.autoCheckBox.IsEnabled = enable;
+            loading = true;
+            startupCheckBox.IsChecked = WindowsStartup.IsEnabled();
+            loading = false;
+            MessageBox.Show(error.Message, "无法修改当前用户的登录启动设置", MessageBoxButton.OK, MessageBoxImage.Warning);
         }
+    }
 
-        private void LoginButton_Click(object sender, RoutedEventArgs e)
-        {
-            if (thread == null) StartCore();
-            else StopCore();
-        }
+    private void Window_StateChanged(object sender, EventArgs e) { if (WindowState == WindowState.Minimized) Hide(); }
 
-        private delegate void NoArgDelegate();
-
-        private void KillCoreProcessOwned()
-        {
-            try { process?.Kill(); }
-            catch (Exception) { }
-            process = null;
-            try { thread?.Abort(); }
-            catch (Exception) { }
-            thread = null;
-        }
-
-        private void StopCore()
-        {
-            this.label.Text = "正在停止...";
-            KillCoreProcessOwned();
-            this.label.Text = "已停止！";
-            this.success = false;
-            SetUIEnabled(true);
-            this.ShowAndActive();
-        }
-
-        private void StartCore()
-        {
-            if (this.nameComboBox.Text.Trim().Length == 0 || this.passwordTextBox.Password.Length == 0)
-            {
-                MessageBox.Show("请输入账号和密码！", "错误", MessageBoxButton.OK, MessageBoxImage.Error);
-                return;
-            }
-            string ip = this.ipTextBox.Text.Trim();
-            if (ip.Length > 0 && !IPAddress.TryParse(ip, out IPAddress ipaddress))
-            {
-                MessageBox.Show("IP地址格式不正确，不需要指定时请留空", "错误", MessageBoxButton.OK, MessageBoxImage.Error);
-                return;
-            }
-            SaveInput(true);
-            SetUIEnabled(false);
-            this.label.Text = "正在认证...";
-
-            StringBuilder arguments = new();
-            if (!string.IsNullOrEmpty(config.Mac))
-            {
-                arguments.Append($" --mac \"{config.Mac}\"");
-            }
-            if (!string.IsNullOrEmpty(current.IP))
-            {
-                arguments.Append($" --ip \"{current.IP}\"");
-            }
-            arguments.Append($" --username \"{current.Name}\" --password \"{current.Password}\"");
-
-            thread = new Thread(new ThreadStart(() =>
-            {
-                process = BuildCoreProcess(arguments.ToString());
-
-                Regex errorRegex = new(@"\[.*?\]\[ERROR\]\[.*?\]\s?(.+)");
-                StringBuilder message = new();
-                process.OutputDataReceived += (sender, args) =>
-                {
-                    string data = args.Data;
-                    if (data == null) return;
-                    if (data.Contains("panic"))
-                    {
-                        this.Dispatcher.BeginInvoke(new NoArgDelegate(() =>
-                        {
-                            StopCore();
-                            this.label.Text = data;
-                            MessageBox.Show(data, "崩溃", MessageBoxButton.OK, MessageBoxImage.Error);
-                        }));
-                        return;
-                    }
-                    if (data.Contains("802.1X Authorization success!"))
-                    {
-                        this.success = true;
-                        message.Clear();
-                        this.Dispatcher.BeginInvoke(new NoArgDelegate(() =>
-                        {
-                            this.label.Text = "认证成功！";
-                            this.WindowState = WindowState.Minimized;
-                        }));
-                    }
-
-                    string errorMsg = errorRegex.Match(data).Groups[1].Value;
-                    if (errorMsg.Length == 0) return;
-
-                    if (this.success)
-                    {
-                        if (errorMsg.Contains("ignored"))
-                            return;
-
-                        this.Dispatcher.BeginInvoke(new NoArgDelegate(() =>
-                        {
-                            this.label.Text = errorMsg.Contains("Will try reconnect at the next")
-                                ? errorMsg : "出现错误，但是保持核心程序运行。";
-                            ShowAndActive();
-                        }));
-                        return;
-                    }
-
-                    message.Append(errorMsg).Append('\n');
-                    if (errorMsg.Contains("reconnect"))
-                    {
-                        this.Dispatcher.BeginInvoke(new NoArgDelegate(() =>
-                        {
-                            StopCore();
-                            string text = "认证失败，已停止！\n" + message.ToString().TrimEnd();
-                            this.label.Text = text;
-                            MessageBox.Show(text, "错误", MessageBoxButton.OK, MessageBoxImage.Error);
-                        }));
-                    }
-                };
-                process.Start();
-                process.BeginOutputReadLine();
-                process.WaitForExit();
-                this.Dispatcher.BeginInvoke(new NoArgDelegate(StopCore));
-            }));
-            thread.Start();
-        }
+    private async void Window_Closing(object? sender, CancelEventArgs e)
+    {
+        if (closeAllowed) return;
+        e.Cancel = true;
+        if (closing) return;
+        closing = true;
+        lifetime.Cancel();
+        await StopCoreAsync();
+        tray?.Dispose();
+        trayIcon?.Dispose();
+        lifetime.Dispose();
+        closeAllowed = true;
+        Close();
     }
 }

@@ -1,49 +1,43 @@
-﻿using System;
+using System;
 using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Threading;
 using System.Windows;
 
-namespace drcom4scutGUI
+namespace drcom4scutGUI;
+
+public partial class App : Application
 {
-    /// <summary>
-    /// App.xaml 的交互逻辑
-    /// </summary>
-    public partial class App : Application
+    private Mutex? instance;
+    private bool ownsInstance;
+
+    [DllImport("user32.dll")]
+    private static extern bool SetForegroundWindow(IntPtr window);
+
+    protected override void OnStartup(StartupEventArgs e)
     {
-        [DllImport("user32.dll")]
-        protected static extern bool SetForegroundWindow(IntPtr hWnd);
-
-        protected static Mutex mutex = new Mutex(true, "{67C0C622-65A4-45DA-9485-070C490922AA}");
-
-        /// <summary>
-        /// Application Entry Point.
-        /// </summary>
-        [System.STAThreadAttribute()]
-        public static void Main()
+        instance = new Mutex(true, @"Local\SeaLoong.drcom4scutGUI", out ownsInstance);
+        if (!ownsInstance)
         {
-            Process currentProcess = Process.GetCurrentProcess();
-            Process[] processes = Process.GetProcessesByName(currentProcess.ProcessName);
-            if (mutex.WaitOne(TimeSpan.Zero, true) && processes.Length == 1)
+            using Process self = Process.GetCurrentProcess();
+            foreach (Process process in Process.GetProcessesByName(self.ProcessName))
             {
-                App app = new App();
-                app.InitializeComponent();
-                app.Run();
-                mutex.ReleaseMutex();
-            }
-            else
-            {
-                MessageBox.Show("程序已在运行！", "错误", MessageBoxButton.OK, MessageBoxImage.Error);
-                foreach (Process process in processes)
-                {
-                    if (process.MainWindowHandle != IntPtr.Zero &&
-                        process.MainWindowHandle != currentProcess.MainWindowHandle)
-                    {
+                using (process)
+                    if (process.Id != self.Id && process.MainWindowHandle != IntPtr.Zero)
                         SetForegroundWindow(process.MainWindowHandle);
-                    }
-                }
             }
-            mutex.Close();
+            Shutdown();
+            return;
         }
+        base.OnStartup(e);
+        MainWindow = new MainWindow();
+        MainWindow.Show();
+    }
+
+    protected override void OnExit(ExitEventArgs e)
+    {
+        if (ownsInstance) instance?.ReleaseMutex();
+        instance?.Dispose();
+        base.OnExit(e);
     }
 }

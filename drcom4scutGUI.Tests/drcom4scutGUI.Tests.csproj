@@ -1,0 +1,23 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <OutputType>Exe</OutputType>
+    <IsTestProject>true</IsTestProject>
+    <IsPackable>false</IsPackable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="xunit.v3" Version="4.0.2" />
+    <PackageReference Include="Microsoft.Testing.Extensions.TrxReport" Version="2.5.1" />
+    <ProjectReference Include="../drcom4scutGUI.Core/drcom4scutGUI.Core.csproj" />
+    <ProjectReference Include="FakeCore/FakeCore.csproj" ReferenceOutputAssembly="false" />
+    <Compile Remove="FakeCore/**" />
+  </ItemGroup>
+  <Target Name="CopyFakeCore" AfterTargets="Build">
+    <ItemGroup>
+      <FakeCoreFiles Include="$(MSBuildProjectDirectory)/FakeCore/bin/$(Configuration)/net10.0/*" />
+    </ItemGroup>
+    <Copy SourceFiles="@(FakeCoreFiles)" DestinationFolder="$(OutDir)helpers" />
+  </Target>
+</Project>
