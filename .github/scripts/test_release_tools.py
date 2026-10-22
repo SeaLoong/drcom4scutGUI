@@ -156,6 +156,14 @@ class PackageTests(unittest.TestCase):
             verifier.verify(archive.parent, "a" * 40)
         self.assertFalse((archive.parent / "SHA256SUMS").exists())
 
+    def test_unix_archive_preserves_a_runnable_apphost_on_hosts_without_execute_bits(self):
+        publish = self.make_publish("linux-x64")
+        (publish / "drcom4scutGUI").chmod(0o644)
+        archive = packager.package(publish, self.root / "dist", "linux-x64")
+        with tarfile.open(archive) as package:
+            apphost = package.getmember("drcom4scutGUI-2.0.0-linux-x64/drcom4scutGUI")
+            self.assertEqual(apphost.mode, 0o755)
+
     def test_release_rejects_damaged_archive_and_wrong_checksum_filename(self):
         archive = self.package()
         with archive.open("ab") as output:

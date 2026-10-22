@@ -187,7 +187,13 @@ def package(publish, output, runtime="win-x64"):
                         target.write(path, path.relative_to(contents.parent).as_posix())
         else:
             with tarfile.open(archive, "w:gz") as target:
-                target.add(contents, arcname=stem)
+                def executable_mode(member):
+                    # NTFS cannot represent Unix execute bits when publishing
+                    # another RID. The apphost must still be runnable on extract.
+                    if member.name == f"{stem}/{executable_relative(runtime)}":
+                        member.mode = 0o755
+                    return member
+                target.add(contents, arcname=stem, filter=executable_mode)
     digest = hashlib.sha256(archive.read_bytes()).hexdigest()
     archive.with_suffix(archive.suffix + ".sha256").write_text(f"{digest}  {archive.name}\n", encoding="utf-8")
     print(f"Created {archive.name}")
