@@ -305,8 +305,11 @@ class NativeBundleSigningTests(unittest.TestCase):
             commands = [call.args[0] for call in run.call_args_list]
             self.assertEqual(commands[0][-1], str(native))
             self.assertEqual(commands[1][-1], str(bundle))
+            self.assertIn("--sign", commands[1])
+            self.assertNotIn("--deep", commands[1])
             self.assertEqual(commands[2][-1], str(bundle))
             self.assertIn("--verify", commands[2])
+            self.assertIn("--deep", commands[2])
             self.assertIn("--strict", commands[2])
             self.assertFalse(any(command[-1] in (str(managed), str(apphost)) for command in commands))
             if os.name != "nt":

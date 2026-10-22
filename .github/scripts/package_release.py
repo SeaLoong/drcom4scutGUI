@@ -112,7 +112,10 @@ def sign_app_bundle(bundle):
         # bundle. Leave it until all native children are signed and seal once.
         if path != executable:
             subprocess.run(["codesign", "--force", "--sign", "-", str(path)], check=True, timeout=120)
-    subprocess.run(["codesign", "--force", "--deep", "--sign", "-", str(bundle)], check=True, timeout=120)
+    # Sign inside out, then seal the bundle without --deep. Recursive signing
+    # also signs managed PE assemblies through extended attributes, which a
+    # portable tar archive cannot preserve. Deep verification remains required.
+    subprocess.run(["codesign", "--force", "--sign", "-", str(bundle)], check=True, timeout=120)
     subprocess.run(["codesign", "--verify", "--deep", "--strict", str(bundle)], check=True, timeout=60)
 
 
