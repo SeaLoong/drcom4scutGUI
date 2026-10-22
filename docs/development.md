@@ -63,10 +63,16 @@ python .github/scripts/package_release.py --publish-dir artifacts/publish/win-x6
 
 版本由 `Directory.Build.props` 统一声明。元数据记录源码提交和工作区是否有未提交修改；本地脏工作区的包不应当作干净提交的正式发布。
 
-## CI 和手动 Release
+## CI、自动预发布和手动 Release
 
 [普通 CI](../.github/workflows/ci.yml)通过[共用验证流程](../.github/workflows/validate-build.yml)执行 Linux/Windows 共享测试、GUI 构建，并在 Windows 发布自包含产物。注意 CI 结论对应的具体提交，不能将先前通过的运行算作后续改动的验证。
 
+向本仓库 `master` 推送提交时，全部验证通过后自动发布开发预览。PR、其他分支和手动运行普通 CI 只做验证，不发布预览。预览复用同一次 CI 中的自包含包，检查 SHA-256、目标平台和干净源码提交后，再将上传完成的草稿公开为 **Pre-release**，不会替换正式版的 **Latest**。
+
+预览标签为 `preview-运行号-尝试号-提交前8位`，每次构建使用独立标签，不移动既有标签。压缩包和程序的版本仍由 `Directory.Build.props` 声明；通过标签、发布说明和包内 `BUILD-INFO.json` 可以追溯完整源码 SHA。自动预览保留最近 10 个，清理较旧预览时保留 Git 标签；正式版和其他发布不会被清理。
+
 手动发布入口为 GitHub **Actions → Manual GUI release → Run workflow**。标签必须与 `Directory.Build.props` 的版本一致；默认创建草稿。流程重新验证源码、测试和包校验和，并要求包来自本次验证的干净提交；已有标签指向其他提交时会拒绝发布。
+
+自动预览与手动正式发布的安排参考 [Sensa 的 CI](https://github.com/SeaLoong/Sensa/blob/9dc7de27645fb484fa52711656bf31b05ff3f84a/.github/workflows/ci.yml)和[发布流程](https://github.com/SeaLoong/Sensa/blob/9dc7de27645fb484fa52711656bf31b05ff3f84a/.github/workflows/release.yml)。
 
 原生 Windows CI 可以验证编译、共享逻辑和系统密码保护，但真实 UI 交互、驱动捕获及校园认证仍需要目标环境验证。不要把 Linux 交叉构建、模拟服务端或一个 PID 当作这些检查的替代。

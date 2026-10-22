@@ -59,25 +59,7 @@ jobs:
           name: gui-package-win-x64
           path: dist
       - name: Verify GUI package metadata and checksum
-        run: |
-          python - <<'PY'
-          import hashlib, json, os, pathlib, zipfile, xml.etree.ElementTree as ET
-          version = ET.parse('Directory.Build.props').findtext('.//Version')
-          stem = f'drcom4scutGUI-{version}-win-x64'
-          archive = pathlib.Path('dist') / f'{stem}.zip'
-          expected = archive.with_suffix('.zip.sha256').read_text().split()[0]
-          if hashlib.sha256(archive.read_bytes()).hexdigest() != expected:
-              raise SystemExit('GUI package checksum mismatch')
-          with zipfile.ZipFile(archive) as package:
-              metadata = json.loads(package.read(f'{stem}/BUILD-INFO.json'))
-          if metadata.get('version') != version or metadata.get('runtime') != 'win-x64' or metadata.get('source_commit') != os.environ['GITHUB_SHA']:
-              raise SystemExit('GUI package does not match the validated source')
-          if metadata.get('source_dirty') is not False:
-              raise SystemExit('Refusing a release package built from a modified source checkout')
-          if metadata.get('self_contained') is not True or metadata.get('core_included') is not False:
-              raise SystemExit('Unexpected GUI package layout')
-          pathlib.Path('dist/SHA256SUMS').write_text(f'{expected}  {archive.name}\n')
-          PY
+        run: python3 .github/scripts/verify_release.py
       - name: Create GUI release from the validated commit
         env:
           GH_TOKEN: ${{ github.token }}

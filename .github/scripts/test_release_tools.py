@@ -21,6 +21,9 @@ spec = importlib.util.spec_from_file_location("gui_package_release", HERE / "pac
 packager = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(packager)
 source_revision = packager.source_revision
+spec = importlib.util.spec_from_file_location("gui_verify_release", HERE / "verify_release.py")
+verifier = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(verifier)
 
 
 class PackageTests(unittest.TestCase):
@@ -45,6 +48,9 @@ class PackageTests(unittest.TestCase):
         self.root_patch = patch.object(packager, "ROOT", self.root)
         self.root_patch.start()
         self.addCleanup(self.root_patch.stop)
+        self.verifier_root_patch = patch.object(verifier, "ROOT", self.root)
+        self.verifier_root_patch.start()
+        self.addCleanup(self.verifier_root_patch.stop)
         self.commit_patch = patch.object(packager, "source_revision", return_value=("a" * 40, False))
         self.commit_patch.start()
         self.addCleanup(self.commit_patch.stop)
@@ -71,6 +77,69 @@ class PackageTests(unittest.TestCase):
         self.assertEqual(metadata["minimum_core_version"], "0.4.1")
         self.assertTrue(metadata["self_contained"])
         self.assertFalse(metadata["core_included"])
+        for _ in range(2):
+            # A retry accepts its previous aggregate, then regenerates it from
+            # the validated archive rather than trusting the old contents.
+            (archive.parent / "SHA256SUMS").write_text("stale checksums\n")
+            self.assertEqual(verifier.verify(archive.parent, "a" * 40), archive)
+            self.assertEqual((archive.parent / "SHA256SUMS").read_text(), f"{actual}  {archive.name}\n")
+
+    def test_release_rejects_damaged_archive_and_wrong_checksum_filename(self):
+        archive = packager.package(self.publish, self.root / "dist")
+        with archive.open("ab") as output:
+            output.write(b"archive bytes were changed after packaging")
+        with self.assertRaisesRegex(SystemExit, "checksum"):
+            verifier.verify(archive.parent, "a" * 40)
+        self.assertFalse((archive.parent / "SHA256SUMS").exists())
+        digest = hashlib.sha256(archive.read_bytes()).hexdigest()
+        archive.with_suffix(".zip.sha256").write_text(f"{digest}  another-package.zip\n")
+        with self.assertRaisesRegex(SystemExit, "filename"):
+            verifier.verify(archive.parent, "a" * 40)
+
+    def test_release_rejects_wrong_source_and_unexpected_files(self):
+        archive = packager.package(self.publish, self.root / "dist")
+        with self.assertRaisesRegex(SystemExit, "validated source"):
+            verifier.verify(archive.parent, "b" * 40)
+        (archive.parent / "another-package.zip").write_bytes(b"unexpected archive")
+        with self.assertRaisesRegex(SystemExit, "artifact set"):
+            verifier.verify(archive.parent, "a" * 40)
+        self.assertFalse((archive.parent / "SHA256SUMS").exists())
+
+    def test_release_rejects_forged_metadata_even_with_a_valid_archive_checksum(self):
+        for field, invalid, message in (
+            ("version", "1.0.0", "validated source"),
+            ("runtime", "win-arm64", "validated source"),
+            ("source_commit", "b" * 40, "validated source"),
+            ("source_dirty", True, "modified source"),
+            ("source_dirty", "false", "modified source"),
+            ("self_contained", False, "layout"),
+            ("core_included", True, "layout"),
+        ):
+            with self.subTest(field=field, invalid=invalid):
+                archive = packager.package(self.publish, self.root / "dist")
+                with zipfile.ZipFile(archive) as source:
+                    contents = {item.filename: source.read(item) for item in source.infolist()}
+                name = archive.stem + "/BUILD-INFO.json"
+                metadata = json.loads(contents[name])
+                metadata[field] = invalid
+                contents[name] = json.dumps(metadata).encode("utf-8")
+                with zipfile.ZipFile(archive, "w") as output:
+                    for name, content in contents.items():
+                        output.writestr(name, content)
+                digest = hashlib.sha256(archive.read_bytes()).hexdigest()
+                archive.with_suffix(".zip.sha256").write_text(f"{digest}  {archive.name}\n")
+                with self.assertRaisesRegex(SystemExit, message):
+                    verifier.verify(archive.parent, "a" * 40)
+                self.assertFalse((archive.parent / "SHA256SUMS").exists())
+
+    def test_release_rejects_invalid_zip_with_matching_checksum(self):
+        archive = packager.package(self.publish, self.root / "dist")
+        archive.write_bytes(b"not a ZIP archive")
+        digest = hashlib.sha256(archive.read_bytes()).hexdigest()
+        archive.with_suffix(".zip.sha256").write_text(f"{digest}  {archive.name}\n")
+        with self.assertRaisesRegex(SystemExit, "Invalid GUI package"):
+            verifier.verify(archive.parent, "a" * 40)
+        self.assertFalse((archive.parent / "SHA256SUMS").exists())
 
     def test_user_account_files_are_never_packaged(self):
         for name in (

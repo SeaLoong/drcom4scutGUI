@@ -13,7 +13,7 @@
 
 ## 安装
 
-1. 从 [GUI Releases](https://github.com/SeaLoong/drcom4scutGUI/releases) 下载 `win-x64` 压缩包并解压。该包自带 .NET 运行时。
+1. 从 [GUI Releases](https://github.com/SeaLoong/drcom4scutGUI/releases) 下载 `win-x64` 压缩包并解压。该包自带 .NET 运行时；需要试用测试版时，选择标有 **Pre-release** 的开发预览包。
 2. 从[核心 Releases](https://github.com/SeaLoong/drcom4scut/releases)下载兼容的 Windows 核心，将 **0.4.1 或更新版本**的 `drcom4scut.exe` 放在 `drcom4scutGUI.exe` 同目录。GUI 包不包含核心。
 3. 使用有线模式时安装 [Npcap](https://npcap.com/#download)。无线 Portal 模式不需要抓包驱动。
 4. 运行 `drcom4scutGUI.exe`。
