@@ -6,6 +6,10 @@ using System.Text.Json;
 // This is a deliberately independent process fixture. It accepts the same secure
 // input channel as the real core, reports only a digest of its synthetic secret,
 // and can remain running so cancellation is exercised against an actual child.
+// Windows consoles may use CP437; the real Rust core decodes stdin as UTF-8.
+// Pin both fixture streams to that protocol rather than inheriting the console.
+Console.InputEncoding = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: true);
+Console.OutputEncoding = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: true);
 string Option(string key)
 {
     int position = Array.IndexOf(args, key);
