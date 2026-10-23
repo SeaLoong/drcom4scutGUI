@@ -21,8 +21,9 @@ def render(repository, sha, tag, *, preview=False, root=ROOT):
     download = f"https://github.com/{repository}/releases/download/{tag}/"
     platforms = json.loads((root / ".github/scripts/platforms.json").read_text())
     title = ("桌面客户端" if gui else "校园网客户端") + " " + version
+    device = "电脑" if gui else "电脑或路由器"
     lines = [f"## {title}" + (" · 预发布" if preview else ""), "",
-             "选择与你的电脑或路由器对应的压缩包，解压后按使用指南连接校园网。", "",
+             f"选择与你的{device}对应的压缩包，解压后按使用指南连接校园网。", "",
              "### 下载", "", "| 系统 / 设备 | 下载 |", "| --- | --- |"]
     labels = {
         "win-x64": "Windows · Intel / AMD 64 位", "win-arm64": "Windows · ARM64",
