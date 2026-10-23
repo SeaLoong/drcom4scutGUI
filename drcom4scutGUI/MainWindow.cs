@@ -364,7 +364,7 @@ public sealed class MainWindow : Window
         int generation = ++sessionGeneration;
         try
         {
-            sessionTask = core.RunAsync(options, line => ReceiveLine(line, generation), line => ReceiveLine(line, generation), authentication.Token,
+            sessionTask = core.RunAsync(options, ReceiveLine, ReceiveLine, authentication.Token,
                 state => ReceiveStatus(state, options.Mode, options.NoUdp, generation));
             int code = await sessionTask;
             label.Text = $"核心程序已退出（代码 {code}）。可使用“环境自检”查看环境。";
@@ -381,7 +381,7 @@ public sealed class MainWindow : Window
         }
     }
 
-    private void ReceiveLine(string line, int generation)
+    internal void ReceiveLine(string line)
     {
         // CoreProcessSession has already hidden both credentials together,
         // before any line reaches the UI or the retained diagnostics buffer.
@@ -390,7 +390,9 @@ public sealed class MainWindow : Window
         Dispatcher.UIThread.Post(() =>
         {
             Interlocked.Exchange(ref logRefreshPending, 0);
-            if (closing || generation != sessionGeneration || sessionTask is null) return;
+            // A failed child can exit before this queued refresh runs. Its
+            // final diagnostics remain useful after the session has ended.
+            if (closing) return;
             logTextBox.Text = diagnostics.Export();
             logTextBox.CaretIndex = logTextBox.Text.Length;
         });

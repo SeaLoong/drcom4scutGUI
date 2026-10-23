@@ -193,6 +193,29 @@ public sealed class MainWindowTests
     });
 
     [Fact]
+    public Task FinalDiagnosticsRemainVisibleAfterTheSessionHasEnded() => OnUi(() =>
+    {
+        MainWindow window = new(skipBackend: true);
+        window.Show();
+        try
+        {
+            TextBlock status = Find<TextBlock>(window, "statusLabel");
+            string? previousStatus = status.Text;
+            // There is no active session when the queued UI work runs, just
+            // as when a child exits before its last output callback is drawn.
+            for (int i = 0; i < 1000; i++) window.ReceiveLine("diagnostic-" + i);
+            window.ReceiveLine("连接失败：请检查网线。");
+            Dispatcher.UIThread.RunJobs();
+            TextBox log = Find<TextBox>(window, "logTextBox");
+            Assert.EndsWith("连接失败：请检查网线。", log.Text);
+            Assert.Contains("diagnostic-999", log.Text);
+            Assert.Equal(200, log.Text!.Split(Environment.NewLine).Length);
+            Assert.Equal(previousStatus, status.Text);
+        }
+        finally { window.Close(); }
+    });
+
+    [Fact]
     public Task ProbeModeRendersTheRealWindowWithoutStartingAnAuthenticationProcess() => OnUi(() =>
     {
         MainWindow window = new(skipBackend: true);
