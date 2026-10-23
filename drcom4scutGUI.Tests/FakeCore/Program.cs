@@ -67,11 +67,13 @@ if (Option("--username") == "exit-before-stdin")
     // its configuration/features while the parent is still writing its secret.
     Console.WriteLine(JsonSerializer.Serialize(args));
     string statusPath = Option("--status-file");
-    await File.WriteAllTextAsync(statusPath, JsonSerializer.Serialize(new
+    string temporaryStatus = statusPath + ".tmp";
+    await File.WriteAllTextAsync(temporaryStatus, JsonSerializer.Serialize(new
     {
         schema = 1, pid = Environment.ProcessId, phase = "waiting-interface",
         @interface = "synthetic-adapter", eap_authenticated = false, online = false
     }));
+    File.Move(temporaryStatus, statusPath, overwrite: true);
     using CancellationTokenSource deadline = new(TimeSpan.FromSeconds(10));
     while (!File.Exists(statusPath + ".startup-observed")) await Task.Delay(20, deadline.Token);
     Console.Error.WriteLine("synthetic startup configuration rejected");

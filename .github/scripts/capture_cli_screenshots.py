@@ -245,7 +245,7 @@ def main() -> None:
                 terminal.start()
                 ready = terminal.wait_ready()
                 if system == "Windows":
-                    capture_windows(None, image, title)
+                    capture_windows(None, image, title, native_frame=True)
                 else:
                     capture_macos(terminal.pid, image, title)
             finally:

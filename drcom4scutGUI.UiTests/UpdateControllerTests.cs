@@ -162,6 +162,74 @@ public sealed class UpdateControllerTests
     }
 
     [Fact]
+    public async Task QueuedDownloadProgressCannotReplaceInstallationOrFailedCompletion()
+    {
+        FakeClient client = new();
+        client.Available[UpdateComponent.Core] = "0.7.0";
+        QueuedSynchronizationContext callbacks = new();
+        TaskCompletionSource installation = new();
+        List<string> messages = [];
+        using UpdateController controller = new(client, new ManualClock(), (_, _) => Task.FromResult(true),
+            (message, _) => { messages.Add(message); return Task.CompletedTask; },
+            _ => installation.Task, _ => throw new IOException("新核心未通过运行验证"));
+
+        Task update = WithSynchronizationContext(callbacks, () => controller.CheckAsync(UpdateComponent.Core, manual: true));
+        Assert.False(update.IsCompleted);
+        Assert.Equal("正在注销连接并安装更新…", controller.ProgressText);
+        // DownloadAsync queued this report before returning. Deliver it only
+        // after the controller has moved to the installation phase.
+        Assert.True(callbacks.RunNext());
+        Assert.Equal("正在注销连接并安装更新…", controller.ProgressText);
+
+        installation.SetResult();
+        callbacks.Drain();
+        Assert.True(update.IsCompleted);
+        await update;
+        Assert.Contains("新核心未通过运行验证", Assert.Single(messages));
+        Assert.Null(controller.ProgressText);
+
+        client.ProgressReports[0].Report(0.9);
+        Assert.True(callbacks.RunNext());
+        Assert.Null(controller.ProgressText);
+        Assert.False(controller.IsBusy);
+    }
+
+    [Fact]
+    public async Task PreviousDownloadsQueuedReportsCannotReplaceTheNextDownloadsProgress()
+    {
+        FakeClient client = new();
+        client.Available[UpdateComponent.Core] = "0.7.0";
+        QueuedSynchronizationContext callbacks = new();
+        using UpdateController controller = Controller(client, new ManualClock(), [], accept: true);
+        Task first = WithSynchronizationContext(callbacks, () => controller.CheckAsync(UpdateComponent.Core, manual: true));
+        Assert.True(first.IsCompleted);
+        await first;
+        Assert.Null(controller.ProgressText);
+
+        client.DownloadGate = new TaskCompletionSource();
+        Task second = WithSynchronizationContext(callbacks, () => controller.CheckAsync(UpdateComponent.Core, manual: true));
+        Assert.False(second.IsCompleted);
+        Assert.Equal("正在下载并校验更新…", controller.ProgressText);
+        // Deliver the first operation's queued report while the next download
+        // is active, before delivering that download's own report.
+        Assert.True(callbacks.RunNext());
+        Assert.Equal("正在下载并校验更新…", controller.ProgressText);
+        Assert.True(callbacks.RunNext());
+        string? currentProgress = controller.ProgressText;
+        Assert.Contains("50", currentProgress);
+        client.ProgressReports[0].Report(0.9);
+        Assert.True(callbacks.RunNext());
+        Assert.Equal(currentProgress, controller.ProgressText);
+
+        client.DownloadGate.SetResult();
+        callbacks.Drain();
+        Assert.True(second.IsCompleted);
+        await second;
+        Assert.Null(controller.ProgressText);
+        Assert.Empty(controller.Offers);
+    }
+
+    [Fact]
     public async Task FailedInstallationRestoresConnectionControlsAndLeavesTheNoticeForRetry()
     {
         await using HeadlessUnitTestSession session = HeadlessUnitTestSession.StartNew(typeof(TestAppBuilder));
@@ -284,16 +352,53 @@ public sealed class UpdateControllerTests
         }
     }
 
+    private static Task WithSynchronizationContext(SynchronizationContext context, Func<Task> action)
+    {
+        SynchronizationContext? previous = SynchronizationContext.Current;
+        SynchronizationContext.SetSynchronizationContext(context);
+        try { return action(); }
+        finally { SynchronizationContext.SetSynchronizationContext(previous); }
+    }
+
+    private sealed class QueuedSynchronizationContext : SynchronizationContext
+    {
+        private readonly Queue<(SendOrPostCallback Callback, object? State)> callbacks = new();
+
+        public override void Post(SendOrPostCallback callback, object? state)
+        {
+            lock (callbacks) callbacks.Enqueue((callback, state));
+        }
+
+        internal bool RunNext()
+        {
+            (SendOrPostCallback Callback, object? State) next;
+            lock (callbacks)
+            {
+                if (callbacks.Count == 0) return false;
+                next = callbacks.Dequeue();
+            }
+            SynchronizationContext? previous = Current;
+            SetSynchronizationContext(this);
+            try { next.Callback(next.State); }
+            finally { SetSynchronizationContext(previous); }
+            return true;
+        }
+
+        internal void Drain() { while (RunNext()) { } }
+    }
+
     private sealed class FakeClient : IUpdateClient
     {
         internal readonly Dictionary<UpdateComponent, string> Available = new();
         internal readonly List<UpdateComponent> Checks = [];
         internal readonly List<string> Events = [];
+        internal readonly List<IProgress<double>> ProgressReports = [];
         internal Exception? Error;
         internal Exception? InstallError;
         internal bool WaitForCancellation;
         internal bool CheckWasCancelled;
         internal int Downloads;
+        internal TaskCompletionSource? DownloadGate;
 
         public async Task<UpdateOffer?> CheckAsync(UpdateComponent component, CancellationToken cancellationToken)
         {
@@ -307,12 +412,14 @@ public sealed class UpdateControllerTests
             return Available.TryGetValue(component, out string? version) ? new(component, version) : null;
         }
 
-        public Task<IUpdateDownload> DownloadAsync(UpdateOffer offer, IProgress<double> progress, CancellationToken cancellationToken)
+        public async Task<IUpdateDownload> DownloadAsync(UpdateOffer offer, IProgress<double> progress, CancellationToken cancellationToken)
         {
             Downloads++;
             Events.Add("download:" + offer.Component);
+            ProgressReports.Add(progress);
             progress.Report(0.5);
-            return Task.FromResult<IUpdateDownload>(new Download(this, offer.Component));
+            if (DownloadGate is not null) await DownloadGate.Task.WaitAsync(cancellationToken);
+            return new Download(this, offer.Component);
         }
 
         private sealed class Download(FakeClient owner, UpdateComponent component) : IUpdateDownload

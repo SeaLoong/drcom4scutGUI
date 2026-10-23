@@ -109,6 +109,8 @@ def capture_windows(pid: int | None, destination: Path, title_fragment: str = RE
     rect = w.RECT()
     method = "GetWindowRect"
     frame_found = False
+    working_area = None
+    repositioned = False
     if native_frame:
         try:
             dwm = ctypes.WinDLL("dwmapi", use_last_error=True)
@@ -122,6 +124,40 @@ def capture_windows(pid: int | None, destination: Path, title_fragment: str = RE
                 method = "DwmGetWindowAttribute(DWMWA_EXTENDED_FRAME_BOUNDS=9)"
         except (AttributeError, OSError):
             frame_found = False
+    if native_frame and frame_found:
+        class MonitorInfo(ctypes.Structure):
+            _fields_ = [("size", w.DWORD), ("monitor", w.RECT), ("work", w.RECT), ("flags", w.DWORD)]
+        user.MonitorFromWindow.argtypes = [w.HWND, w.DWORD]
+        user.MonitorFromWindow.restype = w.HANDLE
+        user.GetMonitorInfoW.argtypes = [w.HANDLE, ctypes.POINTER(MonitorInfo)]
+        user.SetWindowPos.argtypes = [w.HWND, w.HWND, ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int, w.UINT]
+        monitor = user.MonitorFromWindow(hwnd, 2)  # MONITOR_DEFAULTTONEAREST
+        info = MonitorInfo()
+        info.size = ctypes.sizeof(info)
+        if not monitor or not user.GetMonitorInfoW(monitor, ctypes.byref(info)):
+            raise ctypes.WinError(ctypes.get_last_error())
+        work = info.work
+        width, height = rect.right - rect.left, rect.bottom - rect.top
+        if width > work.right - work.left or height > work.bottom - work.top:
+            raise RuntimeError("The actual Windows capture window is larger than its monitor working area")
+        left = max(work.left, min(rect.left, work.right - width))
+        top = max(work.top, min(rect.top, work.bottom - height))
+        if (left, top) != (rect.left, rect.top):
+            outer = w.RECT()
+            if not user.GetWindowRect(hwnd, ctypes.byref(outer)):
+                raise ctypes.WinError(ctypes.get_last_error())
+            # Move the real window, preserving its exact size and accounting for
+            # GetWindowRect's invisible margins. Never fill/crop missing pixels.
+            if not user.SetWindowPos(hwnd, None, outer.left + left - rect.left, outer.top + top - rect.top,
+                                     0, 0, 0x0001 | 0x0004 | 0x0010):
+                raise ctypes.WinError(ctypes.get_last_error())
+            time.sleep(0.3)
+            if dwm.DwmGetWindowAttribute(hwnd, 9, ctypes.byref(rect), ctypes.sizeof(rect)) != 0:
+                raise RuntimeError("DWM could not confirm the moved native window bounds")
+            repositioned = True
+        if rect.left < work.left or rect.top < work.top or rect.right > work.right or rect.bottom > work.bottom:
+            raise RuntimeError("The actual Windows window could not be fully positioned inside its monitor working area")
+        working_area = {"left": work.left, "top": work.top, "right": work.right, "bottom": work.bottom}
     if not frame_found and client_area:
         # DWM is unavailable on some desktop configurations. Photograph only
         # the real app content there, without manufacturing window decoration.
@@ -158,7 +194,8 @@ def capture_windows(pid: int | None, destination: Path, title_fragment: str = RE
         gdi.DeleteObject(bitmap)
         gdi.DeleteDC(memory)
         user.ReleaseDC(None, screen)
-    return {"method": method, "left": rect.left, "top": rect.top, "right": rect.right, "bottom": rect.bottom}
+    return {"method": method, "left": rect.left, "top": rect.top, "right": rect.right, "bottom": rect.bottom,
+            "workingArea": working_area, "repositioned": repositioned}
 
 
 def capture_linux(pid: int, destination: Path, title_fragment: str = READY_TITLE) -> None:

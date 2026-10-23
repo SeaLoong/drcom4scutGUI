@@ -30,8 +30,11 @@ internal sealed class UpdateController : IDisposable
     private readonly CancellationTokenSource lifetime = new();
     private readonly SemaphoreSlim operation = new(1, 1);
     private readonly Dictionary<UpdateComponent, UpdateOffer> offers = new();
+    private readonly object progressGate = new();
+    private long progressGeneration;
+    private string? progressText;
     private bool scheduleStarted;
-    private bool disposed;
+    private volatile bool disposed;
 
     internal UpdateController(IUpdateClient client, TimeProvider clock,
         Func<UpdateComponent, string, Task<bool>> confirm, Func<string, string, Task> message,
@@ -48,7 +51,7 @@ internal sealed class UpdateController : IDisposable
     internal event Action? Changed;
     internal IReadOnlyDictionary<UpdateComponent, UpdateOffer> Offers => offers;
     internal bool IsBusy { get; private set; }
-    internal string? ProgressText { get; private set; }
+    internal string? ProgressText { get { lock (progressGate) return progressText; } }
 
     internal void ConnectionSucceeded()
     {
@@ -125,18 +128,11 @@ internal sealed class UpdateController : IDisposable
         if (!await confirm(offer.Component, prompt) || disposed) return;
         try
         {
-            ProgressText = "正在下载并校验更新…";
-            Changed?.Invoke();
-            Progress<double> progress = new(value =>
-            {
-                if (disposed || ProgressText is null) return;
-                ProgressText = $"正在下载并校验更新… {Math.Clamp(value, 0, 1):P0}";
-                Changed?.Invoke();
-            });
+            long generation = SetProgressText("正在下载并校验更新…");
+            Progress<double> progress = new(value => ReportDownloadProgress(generation, value));
             using IUpdateDownload download = await client.DownloadAsync(offer, progress, lifetime.Token);
             if (disposed) return;
-            ProgressText = "正在注销连接并安装更新…";
-            Changed?.Invoke();
+            SetProgressText("正在注销连接并安装更新…");
             await beforeInstall(offer.Component);
             lifetime.Token.ThrowIfCancellationRequested();
             await download.InstallAsync(lifetime.Token);
@@ -148,7 +144,30 @@ internal sealed class UpdateController : IDisposable
         {
             if (!disposed) await message(error.Message + "\n可重新连接后再重试更新。", "更新失败");
         }
-        finally { ProgressText = null; Changed?.Invoke(); }
+        finally { SetProgressText(null); }
+    }
+
+    private long SetProgressText(string? text)
+    {
+        long generation;
+        lock (progressGate)
+        {
+            generation = ++progressGeneration;
+            progressText = disposed ? null : text;
+        }
+        Changed?.Invoke();
+        return generation;
+    }
+
+    private void ReportDownloadProgress(long generation, double value)
+    {
+        lock (progressGate)
+        {
+            // A queued report belongs only to the download that created it.
+            if (disposed || generation != progressGeneration) return;
+            progressText = $"正在下载并校验更新… {Math.Clamp(value, 0, 1):P0}";
+        }
+        Changed?.Invoke();
     }
 
     private void SetBusy(bool busy)
@@ -159,8 +178,13 @@ internal sealed class UpdateController : IDisposable
 
     public void Dispose()
     {
-        if (disposed) return;
-        disposed = true;
+        lock (progressGate)
+        {
+            if (disposed) return;
+            disposed = true;
+            ++progressGeneration;
+            progressText = null;
+        }
         lifetime.Cancel();
         // Pending async work owns the token until it observes cancellation.
     }
