@@ -44,7 +44,8 @@ def write_png(path: Path, width: int, height: int, bgr: bytes) -> None:
                      + chunk(b"IDAT", zlib.compress(rows, 9)) + chunk(b"IEND", b""))
 
 
-def capture_windows(pid: int | None, destination: Path, title_fragment: str = READY_TITLE) -> None:
+def capture_windows(pid: int | None, destination: Path, title_fragment: str = READY_TITLE,
+                    *, client_area: bool = False) -> None:
     if not title_fragment:
         raise ValueError("A nonempty window title is required")
     from ctypes import wintypes as w
@@ -58,6 +59,8 @@ def capture_windows(pid: int | None, destination: Path, title_fragment: str = RE
     user.GetWindowTextW.argtypes = [w.HWND, w.LPWSTR, ctypes.c_int]
     user.IsWindowVisible.argtypes = [w.HWND]
     user.GetWindowRect.argtypes = [w.HWND, ctypes.POINTER(w.RECT)]
+    user.GetClientRect.argtypes = [w.HWND, ctypes.POINTER(w.RECT)]
+    user.ClientToScreen.argtypes = [w.HWND, ctypes.POINTER(w.POINT)]
     user.SetForegroundWindow.argtypes = [w.HWND]
     user.GetForegroundWindow.restype = w.HWND
     user.GetDC.argtypes = [w.HWND]
@@ -103,7 +106,17 @@ def capture_windows(pid: int | None, destination: Path, title_fragment: str = RE
     if user.GetForegroundWindow() != hwnd:
         raise RuntimeError("The selected Windows window could not be brought to the foreground for capture")
     rect = w.RECT()
-    if not user.GetWindowRect(hwnd, ctypes.byref(rect)):
+    if client_area:
+        # Photograph the actual app content, excluding Windows' invisible resize
+        # margins and the runner desktop's unpainted non-client title bar.
+        if not user.GetClientRect(hwnd, ctypes.byref(rect)):
+            raise ctypes.WinError(ctypes.get_last_error())
+        origin = w.POINT(rect.left, rect.top)
+        if not user.ClientToScreen(hwnd, ctypes.byref(origin)):
+            raise ctypes.WinError(ctypes.get_last_error())
+        rect.right, rect.bottom = origin.x + rect.right, origin.y + rect.bottom
+        rect.left, rect.top = origin.x, origin.y
+    elif not user.GetWindowRect(hwnd, ctypes.byref(rect)):
         raise ctypes.WinError(ctypes.get_last_error())
     width, height = rect.right - rect.left, rect.bottom - rect.top
     if not (400 <= width <= 4000 and 400 <= height <= 4000):
@@ -228,7 +241,7 @@ def main() -> None:
                         process = subprocess.Popen([str(gui)], cwd=gui.parent, env=environment, stdout=log, stderr=subprocess.STDOUT)
                         try:
                             if system == "Windows":
-                                capture_windows(process.pid, image, expected_title)
+                                capture_windows(process.pid, image, expected_title, client_area=True)
                             elif system == "Darwin":
                                 capture_macos(process.pid, image, expected_title, helper=helper)
                             else:
@@ -249,7 +262,8 @@ def main() -> None:
                     manifest.append({"file": image.name, "platform": platform_name, "kind": "GUI", "version": version,
                                      "title": "有线连接窗口" if scene == "main" else "校园网页认证窗口",
                                      "description": "示例账号 student-demo，密码为空，未发起校园网认证。",
-                                     "capture": f"实际 {platform_name} 原生应用窗口" + ("（X11 虚拟显示器）" if system == "Linux" else ""),
+                                     "capture": ("实际 Windows 原生应用内容区域" if system == "Windows" else
+                                                 f"实际 {platform_name} 原生应用窗口" + ("（X11 虚拟显示器）" if system == "Linux" else "")),
                                      "width": width, "height": height, "gui_commit": gui_sha, "core_commit": core_sha,
                                      "core_version": core_version, "sha256": hashlib.sha256(data).hexdigest(),
                                      "gui_executable_sha256": hashlib.sha256(gui.read_bytes()).hexdigest(),
@@ -260,7 +274,9 @@ def main() -> None:
         if copied_core:
             adjacent_core.unlink()
     (output / "screenshots.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    print(json.dumps(manifest, ensure_ascii=False, indent=2))
+    # Windows CI can redirect stdout through a legacy console encoding.
+    # The artifact above remains UTF-8; escaped log output also works there.
+    print(json.dumps(manifest, ensure_ascii=True, indent=2))
 
 
 if __name__ == "__main__":

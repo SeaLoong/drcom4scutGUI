@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import argparse
 import base64
-import ctypes
 import hashlib
 import json
 import os
@@ -42,6 +41,13 @@ try {{
     $Host.UI.RawUI.WindowTitle = {path(title)}
     $Host.UI.RawUI.BackgroundColor = 'DarkBlue'
     $Host.UI.RawUI.ForegroundColor = 'Gray'
+    $deadline = [DateTime]::UtcNow.AddSeconds(10)
+    while ($Host.UI.RawUI.LargestWindowSize.Width -lt 1 -and [DateTime]::UtcNow -lt $deadline) {{
+        Start-Sleep -Milliseconds 100
+    }}
+    if ($Host.UI.RawUI.LargestWindowSize.Width -lt 1 -or $Host.UI.RawUI.LargestWindowSize.Height -lt 1) {{
+        throw 'The native console has no usable screen buffer or interactive desktop'
+    }}
     $columns = [Math]::Min(112, $Host.UI.RawUI.LargestWindowSize.Width)
     $rows = [Math]::Min(28, $Host.UI.RawUI.LargestWindowSize.Height)
     $buffer = $Host.UI.RawUI.BufferSize
@@ -125,7 +131,7 @@ class NativeTerminal:
     def __init__(self, directory: Path, title: str, system: str):
         self.directory, self.title, self.system = directory, title, system
         self.pid: int | None = None
-        self.handle = None
+        self.process: subprocess.Popen | None = None
 
     def start(self) -> None:
         if self.system == "Windows":
@@ -135,21 +141,13 @@ class NativeTerminal:
             script = self.directory / "capture.ps1"
             script.write_text(windows_session(self.directory, self.title), encoding="utf-8-sig")
             child = encoded_powershell(f"& {powershell_literal(script)}")
-            launch = f"""$ErrorActionPreference = 'Stop'
-$process = Start-Process -FilePath {powershell_literal(powershell)} -ArgumentList @('-NoLogo', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', '{child}') -WindowStyle Normal -PassThru
-[Console]::Out.WriteLine($process.Id)
-"""
-            self.pid = int(run(powershell, "-NoLogo", "-NoProfile", "-NonInteractive", "-EncodedCommand", encoded_powershell(launch), timeout=30))
-            from ctypes import wintypes as w
-            self.kernel = ctypes.WinDLL("kernel32", use_last_error=True)
-            self.kernel.OpenProcess.argtypes = [w.DWORD, w.BOOL, w.DWORD]
-            self.kernel.OpenProcess.restype = w.HANDLE
-            self.kernel.WaitForSingleObject.argtypes = [w.HANDLE, w.DWORD]
-            self.kernel.TerminateProcess.argtypes = [w.HANDLE, w.UINT]
-            self.kernel.CloseHandle.argtypes = [w.HANDLE]
-            self.handle = self.kernel.OpenProcess(0x00100001, False, self.pid)  # SYNCHRONIZE | PROCESS_TERMINATE
-            if not self.handle:
-                raise ctypes.WinError(ctypes.get_last_error())
+            # Leave all three standard streams unset: STARTF_USESTDHANDLES would
+            # inherit the runner's pipes instead of the new console's handles.
+            self.process = subprocess.Popen(
+                [powershell, "-NoLogo", "-NoProfile", "-ExecutionPolicy", "Bypass", "-EncodedCommand", child],
+                creationflags=subprocess.CREATE_NEW_CONSOLE,
+            )
+            self.pid = self.process.pid
         else:
             script = self.directory / "capture.command"
             script.write_text(macos_session(self.directory, self.title), encoding="utf-8")
@@ -180,21 +178,19 @@ $process = Start-Process -FilePath {powershell_literal(powershell)} -ArgumentLis
                     return json.loads(ready.read_text(encoding="utf-8-sig"))
                 except json.JSONDecodeError:
                     pass  # The terminal may still be finishing its small ready file.
-            if self.handle and self.kernel.WaitForSingleObject(self.handle, 0) == 0:
+            if self.process is not None and self.process.poll() is not None:
                 raise RuntimeError("The native PowerShell console exited before completing the commands")
             time.sleep(0.2)
         raise RuntimeError("The native terminal did not finish its commands; an interactive desktop is required")
 
     def close(self) -> None:
         (self.directory / "done").touch()
-        if self.handle:
+        if self.process is not None:
             try:
-                if self.kernel.WaitForSingleObject(self.handle, 5000) == 0x102:
-                    self.kernel.TerminateProcess(self.handle, 1)
-                    self.kernel.WaitForSingleObject(self.handle, 5000)
-            finally:
-                self.kernel.CloseHandle(self.handle)
-                self.handle = None
+                self.process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                self.process.terminate()
+                self.process.wait(timeout=5)
         elif self.pid is not None and self.system == "Darwin":
             # This PID belongs to the new app instance returned by NSWorkspace.
             time.sleep(0.4)
