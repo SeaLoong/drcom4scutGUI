@@ -46,7 +46,7 @@ def write_png(path: Path, width: int, height: int, bgr: bytes) -> None:
 
 
 def capture_windows(pid: int | None, destination: Path, title_fragment: str = READY_TITLE,
-                    *, client_area: bool = False) -> None:
+                    *, client_area: bool = False, native_frame: bool = False) -> dict:
     if not title_fragment:
         raise ValueError("A nonempty window title is required")
     from ctypes import wintypes as w
@@ -107,9 +107,24 @@ def capture_windows(pid: int | None, destination: Path, title_fragment: str = RE
     if user.GetForegroundWindow() != hwnd:
         raise RuntimeError("The selected Windows window could not be brought to the foreground for capture")
     rect = w.RECT()
-    if client_area:
-        # Photograph the actual app content, excluding Windows' invisible resize
-        # margins and the runner desktop's unpainted non-client title bar.
+    method = "GetWindowRect"
+    frame_found = False
+    if native_frame:
+        try:
+            dwm = ctypes.WinDLL("dwmapi", use_last_error=True)
+            dwm.DwmGetWindowAttribute.argtypes = [w.HWND, w.DWORD, ctypes.c_void_p, w.DWORD]
+            dwm.DwmGetWindowAttribute.restype = ctypes.c_long
+            # DWMWA_EXTENDED_FRAME_BOUNDS includes the real title bar and
+            # excludes the invisible resize margins around a desktop window.
+            frame_found = dwm.DwmGetWindowAttribute(hwnd, 9, ctypes.byref(rect), ctypes.sizeof(rect)) == 0
+            frame_found = frame_found and rect.right > rect.left and rect.bottom > rect.top
+            if frame_found:
+                method = "DwmGetWindowAttribute(DWMWA_EXTENDED_FRAME_BOUNDS=9)"
+        except (AttributeError, OSError):
+            frame_found = False
+    if not frame_found and client_area:
+        # DWM is unavailable on some desktop configurations. Photograph only
+        # the real app content there, without manufacturing window decoration.
         if not user.GetClientRect(hwnd, ctypes.byref(rect)):
             raise ctypes.WinError(ctypes.get_last_error())
         origin = w.POINT(rect.left, rect.top)
@@ -117,7 +132,8 @@ def capture_windows(pid: int | None, destination: Path, title_fragment: str = RE
             raise ctypes.WinError(ctypes.get_last_error())
         rect.right, rect.bottom = origin.x + rect.right, origin.y + rect.bottom
         rect.left, rect.top = origin.x, origin.y
-    elif not user.GetWindowRect(hwnd, ctypes.byref(rect)):
+        method = "GetClientRect/ClientToScreen (DWM unavailable)" if native_frame else "GetClientRect/ClientToScreen"
+    elif not frame_found and not user.GetWindowRect(hwnd, ctypes.byref(rect)):
         raise ctypes.WinError(ctypes.get_last_error())
     width, height = rect.right - rect.left, rect.bottom - rect.top
     if not (200 <= width <= 4000 and 100 <= height <= 4000):
@@ -142,6 +158,7 @@ def capture_windows(pid: int | None, destination: Path, title_fragment: str = RE
         gdi.DeleteObject(bitmap)
         gdi.DeleteDC(memory)
         user.ReleaseDC(None, screen)
+    return {"method": method, "left": rect.left, "top": rect.top, "right": rect.right, "bottom": rect.bottom}
 
 
 def capture_linux(pid: int, destination: Path, title_fragment: str = READY_TITLE) -> None:
@@ -269,8 +286,9 @@ def main() -> None:
     slug = {"Windows": "windows", "Darwin": "macos", "Linux": "linux"}[system]
     gui_sha = run("git", "-C", str(ROOT), "rev-parse", "HEAD")
     core_sha = run("git", "-C", str(args.core_source), "rev-parse", "HEAD")
-    gui_dirty = bool(run("git", "-C", str(ROOT), "status", "--porcelain", "--untracked-files=normal"))
-    core_dirty = bool(run("git", "-C", str(args.core_source), "status", "--porcelain", "--untracked-files=normal"))
+    gui_changes = run("git", "-C", str(ROOT), "status", "--porcelain", "--untracked-files=normal").splitlines()
+    core_changes = run("git", "-C", str(args.core_source), "status", "--porcelain", "--untracked-files=normal").splitlines()
+    gui_dirty, core_dirty = bool(gui_changes), bool(core_changes)
     core_version = run(str(core), "--version")
     core_semver = re.fullmatch(r"drcom4scut (\d+\.\d+\.\d+)", core_version)
     if core_semver is None:
@@ -323,8 +341,9 @@ def main() -> None:
                         try:
                             settled = wait_for_capture_ready(process, ready, scenario)
                             capture_title = settled["windowTitle"]
+                            native_bounds = None
                             if system == "Windows":
-                                capture_windows(process.pid, image, capture_title, client_area=True)
+                                native_bounds = capture_windows(process.pid, image, capture_title, client_area=True, native_frame=True)
                             elif system == "Darwin":
                                 capture_macos(process.pid, image, capture_title, helper=helper)
                             else:
@@ -346,10 +365,13 @@ def main() -> None:
                                      "title": title,
                                      "description": "示例账号 student-demo，密码为空，未发起校园网认证。" +
                                          ("更新信息来自本地模拟发布响应，未下载或安装更新。" if scenario != "idle" else ""),
-                                     "capture": ("实际 Windows 原生应用内容区域" if system == "Windows" else
+                                     "capture": (("实际 Windows 原生应用窗口（DWM 可见窗口边界，含标题栏）" if native_bounds["method"].startswith("Dwm")
+                                                  else "实际 Windows 原生应用内容区域（DWM 不可用）") if system == "Windows" else
                                                  f"实际 {platform_name} 原生应用窗口" + ("（X11 虚拟显示器）" if system == "Linux" else "")),
+                                     "nativeWindowBounds": native_bounds,
                                      "width": width, "height": height, "gui_commit": gui_sha, "core_commit": core_sha,
                                      "gui_source_dirty": gui_dirty, "core_source_dirty": core_dirty,
+                                     "gui_source_changes": gui_changes, "core_source_changes": core_changes,
                                      "core_version": core_version, "sha256": hashlib.sha256(data).hexdigest(),
                                      "capture_build": "SCREENSHOT_CAPTURE", "update_scenario": scenario,
                                      "mock_update_availability": scenario != "idle", "campus_authentication": False,

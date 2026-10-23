@@ -72,6 +72,11 @@ public sealed partial class MainWindow
         window.Closed += (_, _) => client.Dispose();
         window.Opened += async (_, _) =>
         {
+            // Match the production window's working-area constraint. Without
+            // this, Windows' taskbar can cover the bottom of the photographed
+            // client rectangle on a hosted runner's small desktop.
+            if (window.Screens.Primary is { } screen)
+                window.MaxHeight = Math.Max(420, screen.WorkingArea.Height / screen.Scaling - 35);
             window.label.Text = "示例账号 student-demo，密码为空，未发起校园网认证。";
             if (settings.Scenario == "idle")
             {

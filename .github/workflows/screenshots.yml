@@ -79,6 +79,10 @@ jobs:
         uses: ./artifacts/capture-core/.github/actions/setup-npcap
         with:
           architecture: x64
+      - name: Keep generated SDK import libraries with the core build
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: Move-Item -LiteralPath Packet.lib, wpcap.lib -Destination artifacts/capture-core
       - name: Build the real core
         id: corebuild
         working-directory: artifacts/capture-core
@@ -88,6 +92,11 @@ jobs:
         run: |
           dotnet restore drcom4scutGUI/drcom4scutGUI.csproj --locked-mode
           dotnet publish drcom4scutGUI/drcom4scutGUI.csproj --configuration Release --runtime ${{ matrix.runtime }} --self-contained true --no-restore --output artifacts/capture-app -p:ScreenshotCapture=true -warnaserror
+      - name: Record source checkout state before native photography
+        shell: bash
+        run: |
+          git status --short --untracked-files=normal
+          git -C artifacts/capture-core status --short --untracked-files=normal
       - name: Photograph the actual Linux windows
         if: runner.os == 'Linux'
         run: |
