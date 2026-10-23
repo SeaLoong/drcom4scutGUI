@@ -1,7 +1,7 @@
 # drcom4scutGUI
 
 [![构建与测试](https://github.com/SeaLoong/drcom4scutGUI/actions/workflows/ci.yml/badge.svg?branch=master)](https://github.com/SeaLoong/drcom4scutGUI/actions/workflows/ci.yml)
-[![下载预览版](docs/badges/preview.svg)](https://github.com/SeaLoong/drcom4scutGUI/releases)
+[![下载桌面包](docs/badges/preview.svg)](https://github.com/SeaLoong/drcom4scut/releases)
 [![支持的桌面系统](docs/badges/platforms.svg)](#安装)
 [![许可证](docs/badges/license.svg)](LICENSE)
 
@@ -9,32 +9,21 @@
 
 适用于 Windows、macOS 和 Linux。提供有线登录、断线重连、多账号、记住密码和开机自动连接，也可以代为提交受支持的校园网页登录。连接进度和排障信息都能在窗口里查看。
 
-[软件首页与帮助中心](https://sealoong.github.io/drcom4scut/) · [下载客户端](https://github.com/SeaLoong/drcom4scutGUI/releases) · [完整使用指南](docs/usage.md) · [账号与密码](docs/security.md)
+[软件首页与帮助中心](https://sealoong.github.io/drcom4scut/) · [下载客户端](https://github.com/SeaLoong/drcom4scut/releases) · [完整使用指南](docs/usage.md) · [账号与密码](docs/security.md)
 
 ## 安装
 
-安装需要 **界面程序 + 认证核心** 两个包。界面负责操作，核心负责联网；运行组件已随包提供。
+选择你的系统，按对应指南完成下载、解压和首次连接：
 
-### 1. 下载适合电脑的两个包
+| 你的电脑 | 开始安装 |
+| --- | --- |
+| Windows，Intel / AMD 或 ARM64 | [Windows 安装与连接](docs/windows.md) |
+| Mac，Apple 芯片或 Intel，macOS 15 及以上 | [Mac 安装与连接](docs/macos.md) |
+| Linux 图形桌面，x64 或 ARM64 | [Linux 桌面安装与连接](docs/linux.md) |
 
-打开 [GUI 下载页](https://github.com/SeaLoong/drcom4scutGUI/releases)和[核心下载页](https://github.com/SeaLoong/drcom4scut/releases)，选择最新 **Pre-release（预览版）**，在 **Assets（文件列表）**里按下表选包。本文对应 GUI **3.1.1** 与核心 **0.5.1**；压缩包文件名前面还会有项目名和版本号。
+下载一个文件名含 **`desktop`** 的桌面包，完整解压后打开程序即可。包内已配好图形界面、认证核心和运行组件，也能直接使用命令行。下载页提供最新版本，包括标为 **Pre-release** 的预览版。
 
-| 你的电脑 | 界面包的文件名结尾 | 核心包的文件名结尾 |
-| --- | --- | --- |
-| Windows，Intel / AMD | `win-x64.zip` | `x86_64-pc-windows-msvc.zip` |
-| Windows，ARM64 | `win-arm64.zip` | `aarch64-pc-windows-msvc.zip` |
-| Mac，Apple 芯片 | `osx-arm64.tar.gz` | `aarch64-apple-darwin.tar.gz` |
-| Mac，Intel | `osx-x64.tar.gz` | `x86_64-apple-darwin.tar.gz` |
-| Linux，Intel / AMD | `linux-x64.tar.gz` | `x86_64-unknown-linux-gnu.tar.gz` |
-| Linux，ARM64 | `linux-arm64.tar.gz` | `aarch64-unknown-linux-gnu.tar.gz` |
-
-Windows 在“设置 → 系统 → 关于”查看系统类型；Mac 在“苹果菜单 → 关于本机”查看芯片。Mac 需要 **macOS 15 或更新版本**，Linux 需要图形桌面。`Source code` 是开发用的源码，安装请选上表中的程序包。
-
-### 2. 解压并放在一起
-
-完整解压界面包，再把核心程序复制进去：Windows 的 `drcom4scut.exe` 与 `drcom4scutGUI.exe` 放在一起；Linux 的 `drcom4scut` 与 `drcom4scutGUI` 放在一起。Mac 把 `drcom4scut` 放在 `drcom4scutGUI.app` **旁边**。
-
-有线登录：Windows 先安装 [Npcap](https://npcap.com/#download)；Mac、Linux 按[系统安装指南](docs/usage.md#安装和系统要求)给核心一次网络访问授权。随后像其他桌面软件一样打开 GUI。
+直接查文件名可看[下载对应表](docs/usage.md#下载哪一个核心包)。OpenWrt 路由器使用[路由器指南](https://github.com/SeaLoong/drcom4scut/blob/master/docs/openwrt.md)。
 
 ## 第一次登录
 
@@ -43,6 +32,12 @@ Windows 在“设置 → 系统 → 关于”查看系统类型；Mac 在“苹�
 3. **点击“连接”。** 按需勾选“记住密码”；成功后可以最小化窗口。断线时程序会尝试恢复，点击“断开”结束本次连接。
 
 无线仍然是网页账号密码登录：客户端代为完成受支持的 DrCOM/ePortal 网页步骤。目前已通过模拟服务测试，实际校园适用情况请参照[无线说明](docs/usage.md#无线-portal)；验证码、扫码等页面可直接用浏览器登录。
+
+## 程序界面
+
+![Linux 上实际运行的有线连接窗口](docs/images/gui-linux-main.png)
+
+Linux 实际运行截图，使用示例账号，处于连接前状态。查看各系统界面：[Windows](docs/windows.md#4-连接校园网) · [Mac](docs/macos.md#5-点击连接) · [Linux](docs/linux.md#4-打开窗口并连接)。
 
 ## 常用帮助
 

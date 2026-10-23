@@ -63,9 +63,16 @@ jobs:
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
       - name: Install Linux desktop capture dependencies
         if: runner.os == 'Linux'
+        timeout-minutes: 8
         run: |
-          sudo apt-get update
-          sudo apt-get install --no-install-recommends -y xvfb xauth xfwm4 x11-utils imagemagick dbus-x11 libice6 libsm6 libfontconfig1 libx11-6 libxcb1 libxrandr2 libxi6 libxcursor1 libxrender1 libgl1 libgtk-3-0t64 fonts-dejavu-core fonts-noto-cjk
+          for source in /etc/apt/sources.list /etc/apt/sources.list.d/ubuntu.sources; do
+            if [[ -f "$source" ]]; then
+              sudo sed -i -E 's|https?://azure\.archive\.ubuntu\.com/ubuntu|https://archive.ubuntu.com/ubuntu|g' "$source"
+            fi
+          done
+          apt_options=(-o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30)
+          sudo apt-get "${apt_options[@]}" update
+          sudo apt-get "${apt_options[@]}" install --no-install-recommends -y xvfb xauth xfwm4 x11-utils imagemagick dbus-x11 libice6 libsm6 libfontconfig1 libx11-6 libxcb1 libxrandr2 libxi6 libxcursor1 libxrender1 libgl1 libgtk-3-0t64 fonts-dejavu-core fonts-noto-cjk
       - name: Install the Windows core's packet-capture SDK
         if: runner.os == 'Windows'
         uses: ./artifacts/capture-core/.github/actions/setup-npcap

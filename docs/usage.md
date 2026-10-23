@@ -2,91 +2,52 @@
 
 [返回首页](../README.md)
 
-按自己的电脑完成安装后，就可以在窗口中连接校园网。本页也介绍多账号、自动连接和常见问题。
+首次安装请选择下方的系统指南；已经能打开窗口时，直接看[有线连接](#有线认证)或[校园网页认证](#无线-portal)。本页还提供多账号、自动连接和排障说明。
 
 ## 安装和系统要求
 
-先下载两个包：**GUI 提供操作窗口，核心执行校园认证**。GUI 自带运行组件，无需另外安装 .NET。
+下载一个 **桌面一体包** 即可：图形界面、认证核心和运行组件都已放好。完整解压后，可以打开窗口，也可以在同一目录使用命令行。
 
-从 [GUI 发布页](https://github.com/SeaLoong/drcom4scutGUI/releases)选择最新的 **Pre-release（预览版）**，再到[核心发布页](https://github.com/SeaLoong/drcom4scut/releases)选择配套核心。本文对应 GUI **3.1.1** 和核心 **0.5.1**。在 **Assets（文件列表）**下载下表中的程序包；`Source code` 用于开发。
+| 你的系统 | 完整安装步骤 |
+| --- | --- |
+| Windows | [选处理器 → 解压桌面包 → 有线时安装 Npcap → 连接](windows.md) |
+| macOS | [选芯片 → 解压桌面包 → 首次打开 → 有线授权 → 连接](macos.md) |
+| Linux 桌面 | [选架构 → 准备图形组件 → 核心授权 → 密码库 → 连接](linux.md) |
 
-### 下载哪一个核心包
+各页都包含实际文件摆放位置、首次打开和连接失败后的处理。下表供已经熟悉安装过程的用户快速核对下载文件。
+
+<a id="下载哪一个核心包"></a>
+
+### 下载哪一个桌面包
+
+图形界面和命令行共用同一个桌面包。在[下载页](https://github.com/SeaLoong/drcom4scut/releases)选择最新版本（含预览版），展开 **Assets（文件列表）**，找到文件名含 **`desktop`** 的压缩包。
 
 Windows 在“设置 → 系统 → 关于”查看系统类型；Mac 在“苹果菜单 → 关于本机”查看芯片。Linux 终端运行 `uname -m`：`x86_64` 选 x64，`aarch64` 选 ARM64。
 
-| 电脑 | GUI 包的文件名结尾 | 核心包的文件名结尾 |
+| 电脑 | 桌面包的文件名结尾 | 解压后打开 |
 | --- | --- | --- |
-| Windows，Intel / AMD | `win-x64.zip` | `x86_64-pc-windows-msvc.zip` |
-| Windows，ARM64 | `win-arm64.zip` | `aarch64-pc-windows-msvc.zip` |
-| Mac，Intel | `osx-x64.tar.gz` | `x86_64-apple-darwin.tar.gz` |
-| Mac，Apple 芯片 | `osx-arm64.tar.gz` | `aarch64-apple-darwin.tar.gz` |
-| Linux，Intel / AMD | `linux-x64.tar.gz` | `x86_64-unknown-linux-gnu.tar.gz` |
-| Linux，ARM64 | `linux-arm64.tar.gz` | `aarch64-unknown-linux-gnu.tar.gz` |
+| Windows，Intel / AMD | `win-x64.zip` | `drcom4scutGUI.exe` |
+| Windows，ARM64 | `win-arm64.zip` | `drcom4scutGUI.exe` |
+| Mac，Intel | `osx-x64.tar.gz` | `drcom4scutGUI.app` |
+| Mac，Apple 芯片 | `osx-arm64.tar.gz` | `drcom4scutGUI.app` |
+| Linux，Intel / AMD | `linux-x64.tar.gz` | `drcom4scutGUI` |
+| Linux，ARM64 | `linux-arm64.tar.gz` | `drcom4scutGUI` |
 
-完整解压 GUI 包，保留全部文件，再放入核心程序。需要检查下载完整性时，可将压缩包的 SHA-256 与发布页 `SHA256SUMS` 中对应的值比较：Windows 用 `Get-FileHash 文件名 -Algorithm SHA256`，Mac 用 `shasum -a 256 文件名`，Linux 用 `sha256sum 文件名`。
+例如，Windows x64 的文件名形如 `drcom4scut-desktop-core-0.5.1-gui-3.1.1-win-x64.zip`。保留解压出的完整文件夹；`Source code` 是开发用源码。
+
+需要检查下载完整性时，可将压缩包的 SHA-256 与同一发布页 `SHA256SUMS` 中对应的值比较：Windows 用 `Get-FileHash 文件名 -Algorithm SHA256`，Mac 用 `shasum -a 256 文件名`，Linux 用 `sha256sum 文件名`。
 
 ### Windows
 
-推荐使用受支持的 Windows 11。文件应像这样放在一起：
-
-```text
-校园网客户端/
-├── drcom4scutGUI.exe
-├── drcom4scut.exe
-└── 界面包中的其他文件……
-```
-
-有线连接先安装与你系统对应的 [Npcap](https://npcap.com/#download)，它提供校园认证需要的网络报文访问能力。然后双击 `drcom4scutGUI.exe`，按普通用户运行。校园网页认证可以直接使用。
+查看 [Windows 安装与连接](windows.md)。解压桌面包，有线连接准备 Npcap，随后双击 `drcom4scutGUI.exe`。
 
 ### macOS
 
-GUI 需要 **macOS 15 或更新且受 .NET 10 支持的版本**；完整列表见[系统支持说明](https://github.com/dotnet/core/blob/main/release-notes/10.0/supported-os.md)。Apple 芯片选 ARM64 包，可直接运行。
-
-把核心放在 `.app` 旁边，移动安装位置时将两者一起移动：
-
-```text
-校园网客户端/
-├── drcom4scutGUI.app
-└── drcom4scut
-```
-
-双击 `.app` 打开。当前程序尚未取得 Apple Developer ID 签名和公证；首次打开提示来源未验证时，核对下载来源后，按 Apple 的[单个应用打开方法](https://support.apple.com/guide/mac-help/open-a-mac-app-from-an-unknown-developer-mh40616/mac)，在“系统设置 → 隐私与安全性”允许这份应用。
-
-核心是独立程序，也需要系统允许运行。在它所在文件夹的终端执行 `./drcom4scut --version`，按系统提示允许后，再打开 GUI。
-
-有线连接还需要一次 **BPF 授权**，即允许核心访问认证使用的网络报文设备。按[核心 Mac 安装指南](https://github.com/SeaLoong/drcom4scut/blob/master/docs/macos.md)完成后，以普通用户打开 GUI。校园网页认证可以直接使用。
+查看 [Mac 安装与连接](macos.md)。解压后应用与核心已并排放好，首次分别允许运行；有线连接完成 BPF 授权。
 
 ### Linux
 
-GUI 适用于带图形桌面的常见发行版，例如 Ubuntu 22.04 / 24.04；使用 X11，Wayland 桌面需要 XWayland。路由器安装请看 [OpenWrt 指南](https://github.com/SeaLoong/drcom4scut/blob/master/docs/openwrt.md)。
-
-将核心 `drcom4scut` 放进 GUI 文件夹，保留解压出的其他文件，双击 `drcom4scutGUI` 或在该目录执行：
-
-```sh
-./drcom4scutGUI
-```
-
-**缺少组件或中文字体：** Ubuntu 24.04 可以安装以下系统组件，其他发行版使用对应包名：
-
-```sh
-sudo apt install libx11-6 libice6 libsm6 libxcb1 libxrandr2 libxi6 \
-  libxcursor1 libxrender1 libgl1 libfontconfig1 libgtk-3-0t64 \
-  libicu74 libssl3t64 fonts-noto-cjk
-```
-
-完整依赖见 [Avalonia 的 Linux 说明](https://docs.avaloniaui.net/docs/supported-platforms#desktop-linux)与 [.NET 系统列表](https://github.com/dotnet/core/blob/main/release-notes/10.0/supported-os.md)。桌面包使用 glibc。
-
-**记住密码：** Ubuntu 安装 `libsecret-tools`，并解锁桌面密码库，例如 GNOME Keyring。它们一起提供安全保存密码的功能；也可以取消“记住密码”，每次输入。
-
-**有线连接：** 在解压后的文件夹，给核心授予网络报文权限，然后检查：
-
-```sh
-sudo setcap cap_net_raw=ep ./drcom4scut
-getcap ./drcom4scut
-./drcom4scut doctor
-```
-
-`cap_net_raw` 是这项权限的系统名称，授权对象是核心 `drcom4scut`。缺少 `setcap` 时，Ubuntu 安装 `libcap2-bin`。之后以普通用户打开 GUI，点击“环境自检”。每次替换核心后重新授权；受管理的电脑由管理员协助完成。校园网页认证可以直接使用。
+查看 [Linux 桌面安装与连接](linux.md)。解压桌面包，准备系统图形组件；有线权限授予核心，窗口以普通用户运行。
 
 ## 有线认证
 
@@ -95,7 +56,7 @@ getcap ./drcom4scut
 3. 网卡先用“自动选择”；需要指定时，选插着校园网线的以太网卡。“本机 IP（可选）”通常留空。
 4. 按需勾选“记住密码”，点击“连接”。
 
-窗口会显示身份认证、在线确认和连接结果。等待完整连接成功后即可上网；断线时程序会继续尝试恢复。
+窗口先显示“正在连接校园网”，再显示“账号已通过验证，正在确认连接”。出现“已连接，可以上网了”后即可使用网络；断线时会显示“正在自动重连”。
 
 “有线网络（仅 802.1X）”用于学校只要求身份认证的特殊网络。华工常规有线连接使用默认的“有线网络”。
 
@@ -108,6 +69,11 @@ getcap ./drcom4scut
 这项功能参考了公开校园客户端，已通过模拟服务测试，实际校园使用情况仍待验证。需要验证码、短信、扫码或统一身份认证跳转的页面，继续使用浏览器即可。实现来源见[参考记录](https://github.com/SeaLoong/drcom4scut/blob/master/docs/references-clients.md)。
 
 ### 使用校园网页认证
+
+![Linux 上实际运行的校园网页认证窗口](images/gui-linux-portal.png)
+
+Linux 实际运行截图：示例账号、空密码，尚未发起认证。图中地址用于展示输入位置，使用时填写学校当前登录页地址。
+
 
 1. 在系统中连接校园 Wi-Fi，确认平时的校园登录页能正常打开。
 2. 在客户端选择“校园网页认证”，填写账号和密码。
@@ -176,7 +142,7 @@ Windows 的右下角托盘、Mac 的顶部菜单栏都有程序图标。连接�
 
 | 遇到的情况 | 处理方法 |
 | --- | --- |
-| 找不到核心或版本不兼容 | 核对[下载对应表](#下载哪一个核心包)，将核心放在 GUI 旁边，使用对应系统与处理器的版本 |
+| 找不到核心或版本不兼容 | 按[下载对应表](#下载哪一个核心包)重新完整解压对应系统的桌面包，保留全部文件 |
 | Mac 核心无法启动 | 在终端运行 `./drcom4scut --version`，完成系统允许后再试 |
 | 有线环境自检未通过 | Windows 检查 Npcap；Mac、Linux 按安装步骤完成核心授权，再核对网卡 |
 | 填好账号仍连接失败 | 核对账号后缀、密码、网线与所选网卡，查看窗口下方的学校返回信息 |

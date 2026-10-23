@@ -41,28 +41,36 @@ try {{
     $Host.UI.RawUI.WindowTitle = {path(title)}
     $Host.UI.RawUI.BackgroundColor = 'DarkBlue'
     $Host.UI.RawUI.ForegroundColor = 'Gray'
-    $deadline = [DateTime]::UtcNow.AddSeconds(10)
-    while ($Host.UI.RawUI.LargestWindowSize.Width -lt 1 -and [DateTime]::UtcNow -lt $deadline) {{
-        Start-Sleep -Milliseconds 100
+    # Server console hosts can report no maximum size despite having a usable
+    # screen buffer. Keep their actual default window and verify it at capture.
+    $maximum = $Host.UI.RawUI.LargestWindowSize
+    if ($maximum.Width -gt 0 -and $maximum.Height -gt 0) {{
+        $columns = [Math]::Min(112, $maximum.Width)
+        $rows = [Math]::Min(28, $maximum.Height)
+        $buffer = $Host.UI.RawUI.BufferSize
+        $buffer.Width = [Math]::Max($buffer.Width, $columns)
+        $buffer.Height = [Math]::Max($buffer.Height, $rows)
+        $Host.UI.RawUI.BufferSize = $buffer
+        $Host.UI.RawUI.WindowSize = [System.Management.Automation.Host.Size]::new($columns, $rows)
     }}
-    if ($Host.UI.RawUI.LargestWindowSize.Width -lt 1 -or $Host.UI.RawUI.LargestWindowSize.Height -lt 1) {{
-        throw 'The native console has no usable screen buffer or interactive desktop'
-    }}
-    $columns = [Math]::Min(112, $Host.UI.RawUI.LargestWindowSize.Width)
-    $rows = [Math]::Min(28, $Host.UI.RawUI.LargestWindowSize.Height)
-    $buffer = $Host.UI.RawUI.BufferSize
-    $buffer.Width = [Math]::Max($buffer.Width, $columns)
-    $buffer.Height = [Math]::Max($buffer.Height, $rows)
-    $Host.UI.RawUI.BufferSize = $buffer
-    $Host.UI.RawUI.WindowSize = [System.Management.Automation.Host.Size]::new($columns, $rows)
     Add-Type @'
 using System;
 using System.Runtime.InteropServices;
 public static class CaptureConsole {{
     [DllImport("kernel32.dll")] public static extern IntPtr GetConsoleWindow();
     [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr window, out uint process);
+    [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr window);
 }}
 '@
+    $consoleHandle = [CaptureConsole]::GetConsoleWindow()
+    [uint32]$consoleOwner = 0
+    [void][CaptureConsole]::GetWindowThreadProcessId($consoleHandle, [ref]$consoleOwner)
+    $diagnostic = @{{shell_pid = $PID; window_pid = $consoleOwner; window_handle = $consoleHandle.ToInt64();
+        window_visible = [CaptureConsole]::IsWindowVisible($consoleHandle);
+        output_redirected = [Console]::IsOutputRedirected; buffer = $Host.UI.RawUI.BufferSize;
+        window = $Host.UI.RawUI.WindowSize; maximum = $maximum}} | ConvertTo-Json -Depth 3
+    [IO.File]::WriteAllText({path(directory / 'console.json')}, $diagnostic)
+    if ($consoleHandle -eq [IntPtr]::Zero) {{ throw 'No native console window is available' }}
     Clear-Host
     function Invoke-Visible([string[]]$Arguments) {{
         Write-Host ('PS> .\\drcom4scut.exe ' + ($Arguments -join ' ')) -ForegroundColor Cyan
@@ -73,10 +81,6 @@ public static class CaptureConsole {{
     Invoke-Visible -Arguments @('--version')
     Invoke-Visible -Arguments @('--list-interfaces')
     Invoke-Visible -Arguments @('--config', 'config.yml', '--check-config')
-    [uint32]$consoleOwner = 0
-    $consoleHandle = [CaptureConsole]::GetConsoleWindow()
-    if ($consoleHandle -eq [IntPtr]::Zero) {{ throw 'No native console window is available' }}
-    [void][CaptureConsole]::GetWindowThreadProcessId($consoleHandle, [ref]$consoleOwner)
     $ready = @{{shell_pid = $PID; window_pid = $consoleOwner}} | ConvertTo-Json -Compress
     [IO.File]::WriteAllText({path(directory / 'ready.json')}, $ready)
 }} catch {{
@@ -143,8 +147,13 @@ class NativeTerminal:
             child = encoded_powershell(f"& {powershell_literal(script)}")
             # Leave all three standard streams unset: STARTF_USESTDHANDLES would
             # inherit the runner's pipes instead of the new console's handles.
+            conhost = shutil.which("conhost.exe")
+            if conhost is None:
+                raise RuntimeError("Windows Console Host is required for native console capture")
+            # Request the visible legacy console host explicitly, independent of
+            # Windows Terminal's per-user default-terminal delegation settings.
             self.process = subprocess.Popen(
-                [powershell, "-NoLogo", "-NoProfile", "-ExecutionPolicy", "Bypass", "-EncodedCommand", child],
+                [conhost, powershell, "-NoLogo", "-NoProfile", "-ExecutionPolicy", "Bypass", "-EncodedCommand", child],
                 creationflags=subprocess.CREATE_NEW_CONSOLE,
             )
             self.pid = self.process.pid
@@ -236,11 +245,14 @@ def main() -> None:
                 terminal.start()
                 ready = terminal.wait_ready()
                 if system == "Windows":
-                    capture_windows(ready.get("window_pid") or None, image, title)
+                    capture_windows(None, image, title)
                 else:
                     capture_macos(terminal.pid, image, title)
             finally:
                 terminal.close()
+                diagnostic = directory / "console.json"
+                if diagnostic.exists():
+                    shutil.copy2(diagnostic, output / "windows-cli-console.json")
                 transcript = directory / "transcript.txt"
                 if transcript.exists():
                     # PowerShell 5 Tee-Object writes UTF-16LE; normalize only this text evidence.

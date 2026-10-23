@@ -10,7 +10,7 @@
 
 换电脑、更换系统用户或重置密码库后，重新输入校园密码即可。日常请保护好电脑登录账号；校园密码本身仍在学校账号管理入口修改。
 
-Linux 需要已解锁的桌面密码库和 `libsecret-tools` 提供的 `/usr/bin/secret-tool`。密码库暂时不可用时，可取消“记住密码”，填写密码后继续连接。详见 [Linux 安装](usage.md#linux)。
+Linux 需要已解锁的桌面密码库和 `libsecret-tools` 提供的 `/usr/bin/secret-tool`。密码库暂时不可用时，可取消“记住密码”，填写密码后继续连接。详见 [Linux 安装](linux.md)。
 
 ## 保存了哪些内容
 

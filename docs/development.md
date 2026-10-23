@@ -92,11 +92,23 @@ dotnet publish drcom4scutGUI/drcom4scutGUI.csproj --configuration Release --runt
 python .github/scripts/package_release.py --runtime linux-x64 --publish-dir artifacts/publish/linux-x64
 ```
 
-归档包含版本/RID 外层目录、自包含程序、README、`docs`、许可证、第三方声明和 `BUILD-INFO.json`。核心由用户单独下载。Windows 使用 ZIP，Linux/macOS 使用 tar.gz。
+这一步生成经过验证的 GUI 组件归档，包含版本/RID 外层目录、自包含程序、README、`docs`、许可证、第三方声明和 `BUILD-INFO.json`。发布流程再将它与匹配平台的核心组合为桌面一体包。Windows 使用 ZIP，Linux/macOS 使用 tar.gz。
 
 macOS 打包在 macOS 执行：原生启动程序位于 `.app/Contents/MacOS`，完整 .NET 载荷位于 `.app/Contents/Resources/publish`。`Info.plist` 记录版本和系统要求；ad-hoc 签名在生成归档及解压后检查完整性。Developer ID 签名和 Apple 公证是独立的发布步骤，目前尚未配置。
 
 打包脚本根据平台清单核对 PE、ELF、Mach-O 格式、处理器、运行时和必要文件。`Directory.Build.props` 统一程序版本；来源信息记录完整提交 SHA 与工作区状态。正式流水线要求干净工作区和精确匹配的源版本，并检查包内没有账号配置或符号链接。
+
+## 更新程序截图
+
+通过 **Actions → Capture native desktop screenshots → Run workflow** 采集真实窗口，`core_ref` 指定配套核心提交。流程分别在 Windows、macOS、Linux 构建并打开程序，使用示例账号和空密码展示连接前界面；Windows、Mac 还采集系统终端中的核心帮助。
+
+下载流程的截图产物后，先核对图片中的平台、版本和窗口内容，再将需要的 PNG 与来源记录合并到 `docs/images/`。`screenshots.json` 记录运行平台、来源提交、文件校验值和截图状态；各系统安装页使用对应系统的图片。官网从这些源文件导入界面展示。
+
+## 桌面一体包
+
+面向用户的下载文件为 `drcom4scut-desktop-core-{coreVersion}-gui-{guiVersion}-{runtime}`。Windows 和 Linux 的 GUI、核心位于同一目录；macOS 的核心位于 `.app` 旁边。根目录包含 `config.example.yml`、`开始使用.txt` 和 `BUNDLE-INFO.json`，GUI 帮助位于 `docs/`，核心帮助位于 `core-help/docs/`。
+
+两个仓库都生成桌面一体包：本仓库使用当前通过验证的 GUI 构建，并按发布时间选择对方最新公开发布的核心版本，包括预览版。打包前验证来源提交、文件校验值、平台与兼容版本；下载指引统一推荐桌面包，图形界面和命令行共用这份下载。
 
 ## CI、自动预发布和手动 Release
 
