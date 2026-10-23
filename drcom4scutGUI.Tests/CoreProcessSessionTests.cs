@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
+using System.Runtime.ExceptionServices;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -16,12 +17,54 @@ public sealed class CoreProcessSessionTests
     {
         string fixture = Path.Combine(Path.GetDirectoryName(Helper)!, "DoctorOversized" + Guid.NewGuid().ToString("N") + (OperatingSystem.IsWindows() ? ".exe" : ""));
         File.Copy(Helper, fixture);
+        Exception? failure = null;
         try
         {
+            Assert.False(File.GetAttributes(fixture).HasFlag(FileAttributes.ReadOnly), "The copied probe image must be writable.");
             await Assert.ThrowsAsync<InvalidDataException>(() => new CoreProcessSession(fixture)
                 .DoctorAsync(TestContext.Current.CancellationToken).WaitAsync(TimeSpan.FromSeconds(6), TestContext.Current.CancellationToken));
+            int pid = int.Parse(await File.ReadAllTextAsync(fixture + ".pid", TestContext.Current.CancellationToken));
+            // File deletion alone cannot establish that TerminateProcess has
+            // completed. Check the exact owned child before retrying cleanup.
+            Process? child;
+            try { child = Process.GetProcessById(pid); }
+            catch (ArgumentException) { child = null; } // Already reaped.
+            using (child)
+                if (child is not null) Assert.True(child.HasExited, $"Probe returned while its child PID {pid} was still running.");
         }
-        finally { File.Delete(fixture); }
+        catch (Exception error) { failure = error; }
+        try
+        {
+            await DeleteStoppedProbeImageAsync(fixture);
+            File.Delete(fixture + ".pid");
+        }
+        catch (Exception cleanup) when (failure is not null)
+        {
+            // Preserve a lifecycle assertion as well as a cleanup failure;
+            // otherwise a locked exe would hide the useful original failure.
+            throw new AggregateException("Probe verification and fixture cleanup both failed.", failure, cleanup);
+        }
+        if (failure is not null) ExceptionDispatchInfo.Capture(failure).Throw();
+    }
+
+    private static async Task DeleteStoppedProbeImageAsync(string path)
+    {
+        Stopwatch elapsed = Stopwatch.StartNew();
+        while (true)
+        {
+            try { File.Delete(path); return; }
+            // Windows can briefly retain an executable image mapping after
+            // forced termination. Retry only access/sharing errors for this
+            // temporary image; persistent permission errors still fail.
+            catch (Exception error) when (OperatingSystem.IsWindows()
+                && error is IOException or UnauthorizedAccessException
+                && (error.HResult & 0xffff) is 5 or 32
+                && !File.GetAttributes(path).HasFlag(FileAttributes.ReadOnly)
+                && elapsed.Elapsed < TimeSpan.FromSeconds(2))
+            {
+                await Task.Delay(25, CancellationToken.None);
+            }
+        }
     }
 
     [Fact]

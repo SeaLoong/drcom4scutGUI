@@ -37,6 +37,7 @@ if (args is ["--doctor"])
     string fixture = Path.GetFileName(Environment.ProcessPath!);
     if (fixture.StartsWith("DoctorOversized", StringComparison.Ordinal))
     {
+        await File.WriteAllTextAsync(Environment.ProcessPath! + ".pid", Environment.ProcessId.ToString());
         Console.Write(new string('x', 1024 * 1024));
         await Task.Delay(Timeout.InfiniteTimeSpan);
     }
