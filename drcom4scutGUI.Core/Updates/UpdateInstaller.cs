@@ -267,7 +267,15 @@ internal static class UpdateInstaller
     private static void PreserveWindowsSecurity(string target, FileSecurity? original)
     {
         FileInfo file = new(target);
-        if (original is not null) file.SetAccessControl(original);
+        if (original is not null)
+        {
+            // A descriptor read from another file has no modified sections. Mark the
+            // copied sections explicitly so SetAccessControl really persists them.
+            FileSecurity copy = new();
+            copy.SetSecurityDescriptorBinaryForm(original.GetSecurityDescriptorBinaryForm(),
+                AccessControlSections.Access | AccessControlSections.Owner | AccessControlSections.Group);
+            file.SetAccessControl(copy);
+        }
         else
         {
             // Moving from a private staging directory retains its inherited ACEs.
