@@ -102,7 +102,7 @@ macOS 打包在 macOS 执行：原生启动程序位于 `.app/Contents/MacOS`，
 
 [CI](https://github.com/SeaLoong/drcom4scutGUI/blob/master/.github/workflows/ci.yml)调用[共用验证流程](https://github.com/SeaLoong/drcom4scutGUI/blob/master/.github/workflows/validate-build.yml)，在六种系统与处理器的原生 runner 上执行测试、窗口检查和打包。汇总阶段检查六个包、源版本、完整 SHA、工作区状态与校验值，再生成 `SHA256SUMS`。
 
-向 `master` 推送并通过全部验证后，流程使用本次产物发布预览版。PR、其他分支、fork 和手动普通 CI 执行验证。预览先上传到草稿，核对远端文件名、大小和 SHA-256 后公开为 **Pre-release**。
+流程在推送到 `master`、提交 PR 或手动运行时执行验证；仅向上游仓库 `master` 推送并通过全部验证后，使用本次产物发布预览版。预览先上传到草稿，核对远端文件名、大小和 SHA-256 后公开为 **Pre-release**。
 
 预览标签为 `preview-运行号-尝试号-提交前8位`，固定到完整源码 SHA；程序版本来自 manifest。流程保留最近 10 个自动预览，清理预览 Release 时保留标签。正式版 **Latest** 保持独立。
 
