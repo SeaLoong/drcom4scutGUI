@@ -37,6 +37,7 @@ public sealed class MainWindow : Window
     private bool canHideToTray;
     private int sessionGeneration;
     private string coreVersion = "";
+    private int logRefreshPending;
     private static string GuiVersion => typeof(MainWindow).Assembly.GetName().Version?.ToString(3) ?? "unknown";
 
     private readonly ComboBox modeComboBox = new() { Name = "modeComboBox", HorizontalAlignment = HorizontalAlignment.Stretch };
@@ -50,10 +51,10 @@ public sealed class MainWindow : Window
     private readonly TextBox portalApiTextBox = new() { Name = "portalApiTextBox", PlaceholderText = "可选，同一可信主机" };
     private readonly TextBox portalAcIpTextBox = new() { Name = "portalAcIpTextBox", PlaceholderText = "可选" };
     private readonly TextBox portalClientIpTextBox = new() { Name = "portalClientIpTextBox", PlaceholderText = "可选，不改变实际网络出口" };
-    private readonly CheckBox allowHttpCheckBox = new() { Name = "allowHttpCheckBox", Content = "允许 HTTP 门户明文网络传输" };
-    private readonly CheckBox autoCheckBox = new() { Name = "autoCheckBox", Content = "打开 GUI 后自动认证" };
+    private readonly CheckBox allowHttpCheckBox = new() { Name = "allowHttpCheckBox", Content = "登录页使用 HTTP（明文传输）" };
+    private readonly CheckBox autoCheckBox = new() { Name = "autoCheckBox", Content = "打开后自动连接" };
     private readonly CheckBox startupCheckBox = new() { Name = "startupCheckBox", Content = "登录系统时启动" };
-    private readonly Button loginButton = new() { Name = "loginButton", Content = "认证", MinWidth = 86, IsDefault = true };
+    private readonly Button loginButton = new() { Name = "loginButton", Content = "连接", MinWidth = 86, IsDefault = true };
     private readonly Button deleteButton = new() { Name = "deleteButton", Content = "删除", IsEnabled = false };
     private readonly Button doctorButton = new() { Name = "doctorButton", Content = "环境自检" };
     private readonly TextBlock label = new() { Name = "statusLabel", Text = "正在检查核心和账号配置…", TextWrapping = TextWrapping.Wrap };
@@ -110,17 +111,23 @@ public sealed class MainWindow : Window
         fields.Children.Add(Row("账号", accountRow));
         fields.Children.Add(Row("密码", passwordTextBox));
         fields.Children.Add(Row("", rememberCheckBox));
-        fields.Children.Add(Row("本机源 IP", ipTextBox));
-        portalPanel.Children.Add(new TextBlock { Text = "无线门户", FontWeight = FontWeight.SemiBold });
-        portalPanel.Children.Add(Row("门户地址", portalBaseTextBox));
-        portalPanel.Children.Add(Row("API 地址", portalApiTextBox));
-        portalPanel.Children.Add(Row("AC IPv4", portalAcIpTextBox));
-        portalPanel.Children.Add(Row("载荷 IPv4", portalClientIpTextBox));
+        fields.Children.Add(Row("本机 IP（可选）", ipTextBox));
+        portalPanel.Children.Add(new TextBlock { Text = "校园网页登录", FontWeight = FontWeight.SemiBold });
+        portalPanel.Children.Add(Row("登录页地址", portalBaseTextBox));
+        StackPanel advancedPortal = new() { Spacing = 7 };
+        advancedPortal.Children.Add(Row("API 地址", portalApiTextBox));
+        advancedPortal.Children.Add(Row("AC IPv4", portalAcIpTextBox));
+        advancedPortal.Children.Add(Row("载荷 IPv4", portalClientIpTextBox));
+        portalPanel.Children.Add(new Expander
+        {
+            Name = "advancedPortalExpander", Header = "更多网页设置（通常留空）",
+            Content = advancedPortal, HorizontalAlignment = HorizontalAlignment.Stretch
+        });
         portalPanel.Children.Add(allowHttpCheckBox);
         portalPanel.Children.Add(new TextBlock
         {
-            Text = "HTTP 会将账号密码明文发送到远端门户。仅在确认校园门户必须使用 HTTP 且接受此风险时开启；不会自动回退 HTTP。",
-            TextWrapping = TextWrapping.Wrap, Foreground = Brushes.Firebrick
+            Text = "先在浏览器中打开校园登录页，再填写该页地址。HTTPS 可加密传输；学校提供 HTTP 登录页时，勾选上面的选项后连接，账号密码会以明文传输。",
+            TextWrapping = TextWrapping.Wrap
         });
         fields.Children.Add(portalPanel);
         StackPanel preferences = new() { Spacing = 3 };
@@ -144,7 +151,7 @@ public sealed class MainWindow : Window
 
     private static Grid Row(string caption, Control input)
     {
-        Grid grid = new() { ColumnDefinitions = new ColumnDefinitions("86,*"), ColumnSpacing = 8 };
+        Grid grid = new() { ColumnDefinitions = new ColumnDefinitions("110,*"), ColumnSpacing = 8 };
         grid.Children.Add(new TextBlock { Text = caption, VerticalAlignment = VerticalAlignment.Center });
         Grid.SetColumn(input, 1);
         grid.Children.Add(input);
@@ -168,7 +175,7 @@ public sealed class MainWindow : Window
             InitTray();
             coreVersion = await core.VerifyCoreAsync(lifetime.Token);
             Title = $"drcom4scutGUI {GuiVersion} — {coreVersion}";
-            label.Text = "已就绪。密码通过私有输入传给核心。" + SecretProtectorFactory.Description;
+            label.Text = "准备好了。选择网络，填写账号和密码，然后点击“连接”。";
             loginButton.IsEnabled = true;
             if (current is { Password.Length: > 0 } && config.Auto) await StartCoreAsync();
         }
@@ -183,7 +190,7 @@ public sealed class MainWindow : Window
     private void InitUI()
     {
         loading = true;
-        modeComboBox.ItemsSource = new[] { new Choice("有线 EAP + UDP", "eap"), new Choice("有线仅 EAP", "eap-only"), new Choice("无线 Portal", "portal") };
+        modeComboBox.ItemsSource = new[] { new Choice("有线网络", "eap"), new Choice("有线网络（仅 802.1X）", "eap-only"), new Choice("校园网页认证", "portal") };
         var choices = new System.Collections.Generic.List<Choice> { new("自动选择", "") };
         foreach (NetworkInterface adapter in NetworkInterface.GetAllNetworkInterfaces())
         {
@@ -218,7 +225,7 @@ public sealed class MainWindow : Window
         NativeMenu menu = new();
         NativeMenuItem open = new("打开");
         open.Click += (_, _) => ShowAndActivate();
-        NativeMenuItem stop = new("停止认证");
+        NativeMenuItem stop = new("断开连接");
         stop.Click += async (_, _) => await StopCoreAsync();
         NativeMenuItem exit = new("退出");
         exit.Click += (_, _) => Close();
@@ -350,7 +357,7 @@ public sealed class MainWindow : Window
         authenticated = false;
         authentication = CancellationTokenSource.CreateLinkedTokenSource(lifetime.Token);
         SetUIEnabled(false);
-        label.Text = config.Mode == "portal" ? "正在进行无线门户认证…" : "正在进行 802.1X 认证…";
+        label.Text = config.Mode == "portal" ? "正在登录校园网页…" : "正在连接校园网…";
         var options = new CoreLaunchOptions(username, password, config.Mac, ip,
             Path.Combine(Path.GetDirectoryName(store.FilePath)!, "core.yml"), config.NoUdp,
             config.Mode, config.PortalBase, config.PortalApi, config.PortalAcIp, config.PortalClientIp, config.AllowHttp);
@@ -376,11 +383,15 @@ public sealed class MainWindow : Window
 
     private void ReceiveLine(string line, int generation)
     {
+        // CoreProcessSession has already hidden both credentials together,
+        // before any line reaches the UI or the retained diagnostics buffer.
         diagnostics.Add(line);
+        if (Interlocked.Exchange(ref logRefreshPending, 1) != 0) return;
         Dispatcher.UIThread.Post(() =>
         {
+            Interlocked.Exchange(ref logRefreshPending, 0);
             if (closing || generation != sessionGeneration || sessionTask is null) return;
-            logTextBox.Text = diagnostics.Export(current?.Name ?? "", current?.Password ?? "");
+            logTextBox.Text = diagnostics.Export();
             logTextBox.CaretIndex = logTextBox.Text.Length;
         });
     }
@@ -395,7 +406,7 @@ public sealed class MainWindow : Window
     {
         if (state.IsOnline)
         {
-            label.Text = mode == "portal" ? "无线门户已确认在线。" : eapOnly ? "802.1X 认证成功（仅 EAP）。" : "认证和 UDP 心跳均成功。";
+            label.Text = eapOnly && mode == "eap" ? "网线认证已通过。" : "已连接，可以上网了。";
             if (!authenticated)
             {
                 authenticated = true;
@@ -406,11 +417,11 @@ public sealed class MainWindow : Window
         {
             label.Text = state.Phase switch
             {
-                CoreConnectionPhase.WaitingInterface => "正在等待可用网卡和 IPv4 地址…",
-                CoreConnectionPhase.EapAuthentication => "正在进行 802.1X 认证…",
-                CoreConnectionPhase.UdpAuthentication => "802.1X 已通过，正在建立 UDP 会话…",
-                CoreConnectionPhase.PortalAuthentication => "正在进行无线门户认证…",
-                _ => "连接已断开，核心程序将按配置重试。详情见日志。"
+                CoreConnectionPhase.WaitingInterface => "正在等待网络就绪，请检查网线或 Wi-Fi 连接…",
+                CoreConnectionPhase.EapAuthentication => "正在连接校园网…",
+                CoreConnectionPhase.UdpAuthentication => "账号已通过验证，正在确认连接…",
+                CoreConnectionPhase.PortalAuthentication => "正在登录校园网页…",
+                _ => "连接中断，正在自动重连…"
             };
             if (authenticated) { authenticated = false; ShowAndActivate(); }
         }
@@ -432,7 +443,7 @@ public sealed class MainWindow : Window
 
     private void SetUIEnabled(bool enabled)
     {
-        loginButton.Content = enabled ? "认证" : "停止";
+        loginButton.Content = enabled ? "连接" : "断开";
         macComboBox.IsEnabled = enabled;
         nameComboBox.IsEnabled = enabled;
         passwordTextBox.IsEnabled = enabled;
@@ -453,8 +464,9 @@ public sealed class MainWindow : Window
             CoreDoctorReport result = await core.DoctorAsync(lifetime.Token);
             string summary = result.PrerequisitesMet ? "自检通过。" : "自检已完成，部分运行条件尚未满足。";
             diagnostics.Add(summary);
-            foreach (string line in result.Report.Split('\n')) diagnostics.Add(line.TrimEnd('\r'));
-            logTextBox.Text = diagnostics.Export(current?.Name ?? "", current?.Password ?? "");
+            foreach (string line in result.Report.Split('\n'))
+                diagnostics.Add(line.TrimEnd('\r'), nameComboBox.Text ?? "", passwordTextBox.Text ?? "");
+            logTextBox.Text = diagnostics.Export();
             await MessageAsync(summary + Environment.NewLine + result.Report, "环境自检");
         }
         catch (OperationCanceledException) when (lifetime.IsCancellationRequested) { }
@@ -476,7 +488,7 @@ public sealed class MainWindow : Window
             await using Stream stream = await selected.OpenWriteAsync();
             stream.SetLength(0);
             await using StreamWriter writer = new(stream);
-            await writer.WriteAsync($"GUI {GuiVersion} / " + coreVersion + Environment.NewLine + diagnostics.Export(current?.Name ?? "", current?.Password ?? ""));
+            await writer.WriteAsync($"GUI {GuiVersion} / " + coreVersion + Environment.NewLine + diagnostics.Export());
         }
         catch (Exception error) { await MessageAsync(error.Message, "导出失败"); }
     }

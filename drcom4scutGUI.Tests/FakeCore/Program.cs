@@ -35,6 +35,11 @@ if (args is ["--version"])
 if (args is ["--doctor"])
 {
     string fixture = Path.GetFileName(Environment.ProcessPath!);
+    if (fixture.StartsWith("DoctorOversized", StringComparison.Ordinal))
+    {
+        Console.Write(new string('x', 1024 * 1024));
+        await Task.Delay(Timeout.InfiniteTimeSpan);
+    }
     if (fixture.StartsWith("DoctorUnavailable", StringComparison.Ordinal))
     {
         Console.WriteLine("Synthetic adapter diagnostics: capture=unavailable");
@@ -82,6 +87,7 @@ string username = Option("--username");
 if (username != "quiet-status")
 {
     Console.WriteLine(JsonSerializer.Serialize(args));
+    Console.WriteLine("username-sha256:" + Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(username))));
     Console.WriteLine("stdin-sha256:" + Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(password))));
     Console.Error.WriteLine("stderr-drained");
 }
@@ -170,5 +176,11 @@ if (Option("--username") == "flood-output")
         Console.WriteLine("stdout-line-" + i);
         Console.Error.WriteLine("stderr-line-" + i);
     }
+}
+if (username == "oversized-output")
+{
+    Console.WriteLine(new string('x', 16380) + password + new string('x', 1024 * 1024));
+    Console.Error.WriteLine(new string('x', 1024 * 1024));
+    Console.WriteLine("following-diagnostic");
 }
 return 17;

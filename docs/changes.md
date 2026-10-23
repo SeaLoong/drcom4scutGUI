@@ -2,11 +2,18 @@
 
 [返回首页](../README.md)
 
-本页用于查版本差异和设计来源。新用户直接看[安装与日常使用](usage.md)，不必先阅读历史记录。下列版本号表示相应源码与功能，不表示每个版本都已发布为正式版；实际可下载文件以[发布页](https://github.com/SeaLoong/drcom4scutGUI/releases)为准。
-
-当前跨平台版本为 GUI 3.1.0，要求核心 0.5.0 或更新的兼容版本，通过 **Pre-release（预发布）**提供。旧的 **Latest** 正式版与这些预发布不是同一个版本。
+本页记录版本变化和设计来源。安装请看[使用指南](usage.md)，可下载的版本见[发布页](https://github.com/SeaLoong/drcom4scutGUI/releases)。
 
 ## 版本记录
+
+### 3.1.1 · 2026-10-24
+
+- 使用“有线网络”“校园网页认证”和“连接 / 断开”等常用名称；额外网页地址设置收在折叠区，首次连接更直观。
+- 日志写入时隐藏账号和密码，切换或删除账号后，历史诊断仍保持隐藏状态。
+- 超长日志整行省略，自检输出超过限制时及时结束子进程；合并高频日志刷新，保持窗口响应。
+- 重写安装和使用帮助，提供统一的软件首页、下载指引与帮助中心。
+- 发布正文提供平台选择、配套核心下载和本版变更，便于从发布页直接开始使用。
+
 
 ### 3.1.0
 
@@ -39,10 +46,10 @@
 
 [LuoMuQAQ/drcom4scut](https://github.com/LuoMuQAQ/drcom4scut) 提供了 Windows 图形客户端、托盘、自启动、密码保护及父进程监督等设计参考。本仓库根据这些使用需求独立实现对应行为，没有捆绑其二进制、图标或安装器。
 
-无线仍是校园网页账号密码登录；这里的自动化只针对特定网页请求，尚未经过本项目实际校园网验证，不代表兼容所有校区。它不负责连接 Wi-Fi，也不代替验证码、短信或扫码。具体适用范围见[无线使用说明](usage.md#无线-portal)。
+校园网页认证代为提交受支持的 DrCOM/ePortal 请求。已通过模拟服务测试，实际校园适用范围见[无线使用说明](usage.md#无线-portal)。
 
-有线和无线认证协议由独立的 [drcom4scut 核心](https://github.com/SeaLoong/drcom4scut)实现。相关客户端与 fork 的调查范围、具体提交及采纳记录见核心仓库的[参考客户端](https://github.com/SeaLoong/drcom4scut/blob/master/docs/references-clients.md)和[fork 记录](https://github.com/SeaLoong/drcom4scut/blob/master/docs/references-forks.md)。这些资料说明设计来源，不代表所有设备或校园网络都已通过实机验证。
+有线和无线认证协议由独立的 [drcom4scut 核心](https://github.com/SeaLoong/drcom4scut)实现。相关客户端与 fork 的调查范围、具体提交及采纳记录见核心仓库的[参考客户端](https://github.com/SeaLoong/drcom4scut/blob/master/docs/references-clients.md)和[fork 记录](https://github.com/SeaLoong/drcom4scut/blob/master/docs/references-forks.md)。这些资料保留设计来源与采纳依据。
 
 ## 许可证
 
-本仓库许可证见 [LICENSE](../LICENSE)。参考项目各自的版权和许可证保持独立；公开可读不代表可以省略署名或直接重新许可其代码、资源。
+本仓库许可证见 [LICENSE](../LICENSE)。参考项目保留各自的版权与许可证；再分发时遵循相应许可并保留署名。

@@ -63,7 +63,7 @@ public sealed class StructuredStatusTests
         cancellation.Cancel();
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => run);
         Assert.DoesNotContain("completed", string.Join('\n', lines));
-        Assert.Contains(lines, line => line == "UDP heartbeat [已隐藏].");
+        Assert.Contains(lines, line => line == "UDP heartbeat [密码已隐藏].");
     }
 
     [Fact]

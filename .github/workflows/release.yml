@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: Release tag matching Directory.Build.props (for example v3.1.0)
+        description: Release tag matching Directory.Build.props (for example v3.1.1)
         required: true
         type: string
       draft:
@@ -77,6 +77,4 @@ jobs:
             git tag -- "$RELEASE_TAG" "$GITHUB_SHA"
           fi
           git push origin "refs/tags/$RELEASE_TAG:refs/tags/$RELEASE_TAG"
-          args=("$RELEASE_TAG" --verify-tag --title "$RELEASE_TAG" --generate-notes)
-          if [[ "$CREATE_DRAFT" == true ]]; then args+=(--draft); fi
-          gh release create "${args[@]}" dist/*.zip dist/*.tar.gz dist/SHA256SUMS
+          python3 .github/scripts/publish_release.py

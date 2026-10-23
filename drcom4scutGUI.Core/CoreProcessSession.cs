@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.ComponentModel;
 using System.Diagnostics;
 using System.IO;
@@ -59,6 +60,7 @@ public sealed class CoreProcessSession(string executable)
     {
         cancellationToken.ThrowIfCancellationRequested();
         ProcessStartInfo start = CreateStartInfo(executable, options);
+        CredentialRedactor redactor = new(options.Username, options.Password);
         using PrivateStatusDirectory statusDirectory = new();
         start.ArgumentList.Add("--status-file");
         start.ArgumentList.Add(statusDirectory.StatusPath);
@@ -68,8 +70,8 @@ public sealed class CoreProcessSession(string executable)
         Start(process);
         // The parent retains this private connection for the entire session. Its OS
         // handle closes on GUI crash, so the core can log off instead of orphaning.
-        Task output = DrainAsync(process.StandardOutput, stdout, options.Password);
-        Task error = DrainAsync(process.StandardError, stderr, options.Password);
+        Task output = CoreOutputReader.ReadLinesAsync(process.StandardOutput, stdout, redactor);
+        Task error = CoreOutputReader.ReadLinesAsync(process.StandardError, stderr, redactor);
         Task status = MonitorStatusAsync(statusDirectory.StatusPath, process.Id, options, connectionChanged, statusLifetime.Token);
         try
         {
@@ -167,11 +169,20 @@ public sealed class CoreProcessSession(string executable)
         process.StartInfo.ArgumentList.Add(argument);
         Start(process);
         using CancellationTokenRegistration registration = deadline.Token.Register(() => KillOwned(process));
-        Task<string> output = process.StandardOutput.ReadToEndAsync();
-        Task<string> error = process.StandardError.ReadToEndAsync();
+        Task<string> output = CoreOutputReader.ReadProbeAsync(process.StandardOutput, deadline.Token);
+        Task<string> error = CoreOutputReader.ReadProbeAsync(process.StandardError, deadline.Token);
         try
         {
-            await process.WaitForExitAsync(deadline.Token).ConfigureAwait(false);
+            // Observe output failures while the child is still running. A core
+            // that fills a pipe after exceeding the output budget must not
+            // hold the environment check open until its normal timeout.
+            List<Task> pending = [process.WaitForExitAsync(deadline.Token), output, error];
+            while (pending.Count > 0)
+            {
+                Task completed = await Task.WhenAny(pending).ConfigureAwait(false);
+                await completed.ConfigureAwait(false);
+                pending.Remove(completed);
+            }
             string text = await output.ConfigureAwait(false);
             string errors = await error.ConfigureAwait(false);
             if (process.ExitCode != 0 && !(argument == "--doctor" && process.ExitCode == 1))
@@ -181,8 +192,10 @@ public sealed class CoreProcessSession(string executable)
         finally
         {
             KillOwned(process);
+            deadline.Cancel();
             await process.WaitForExitAsync(CancellationToken.None).ConfigureAwait(false);
-            await Task.WhenAll(output, error).ConfigureAwait(false);
+            try { await Task.WhenAll(output, error).ConfigureAwait(false); }
+            catch (OperationCanceledException) when (deadline.IsCancellationRequested) { }
         }
     }
 
@@ -213,16 +226,6 @@ public sealed class CoreProcessSession(string executable)
         catch (Win32Exception)
         {
             throw new InvalidOperationException("无法启动安装目录中的 drcom4scut 核心。请安装对应系统和 CPU 的 0.5.0 或更新版本，并检查文件执行权限；Windows 有线模式还需要 Npcap。");
-        }
-    }
-
-    private static async Task DrainAsync(StreamReader stream, Action<string> onLine, string password)
-    {
-        while (await stream.ReadLineAsync().ConfigureAwait(false) is string line)
-        {
-            // Even a misconfigured external core must not display the submitted
-            // password in the GUI log or exported diagnostics.
-            onLine(password.Length == 0 ? line : line.Replace(password, "[已隐藏]", StringComparison.Ordinal));
         }
     }
 

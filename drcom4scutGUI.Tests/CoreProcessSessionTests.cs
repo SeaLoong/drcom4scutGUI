@@ -12,6 +12,34 @@ public sealed class CoreProcessSessionTests
     private static string Helper => System.IO.Path.Combine(AppContext.BaseDirectory, "helpers", OperatingSystem.IsWindows() ? "FakeCore.exe" : "FakeCore");
 
     [Fact]
+    public async Task OversizedProbeOutputStopsTheChildWithoutWaitingForItsNormalExit()
+    {
+        string fixture = Path.Combine(Path.GetDirectoryName(Helper)!, "DoctorOversized" + Guid.NewGuid().ToString("N") + (OperatingSystem.IsWindows() ? ".exe" : ""));
+        File.Copy(Helper, fixture);
+        try
+        {
+            await Assert.ThrowsAsync<InvalidDataException>(() => new CoreProcessSession(fixture)
+                .DoctorAsync(TestContext.Current.CancellationToken).WaitAsync(TimeSpan.FromSeconds(6), TestContext.Current.CancellationToken));
+        }
+        finally { File.Delete(fixture); }
+    }
+
+    [Fact]
+    public async Task GiantChildLinesDoNotLeakPartialPasswordsOrPreventFollowingDiagnostics()
+    {
+        var output = new ConcurrentQueue<string>();
+        var error = new ConcurrentQueue<string>();
+        int code = await new CoreProcessSession(Helper).RunAsync(new("oversized-output", "synthetic-private-password"),
+            output.Enqueue, error.Enqueue, TestContext.Current.CancellationToken);
+        Assert.Equal(17, code);
+        Assert.Contains("following-diagnostic", output);
+        Assert.Contains("[核心日志过长，已省略]", output);
+        Assert.Contains("[核心日志过长，已省略]", error);
+        Assert.DoesNotContain("synthetic-private", string.Join('\n', output));
+        Assert.All(output.Concat(error), line => Assert.True(line.Length <= CoreOutputReader.MaximumLineCharacters));
+    }
+
+    [Fact]
     public async Task CapabilityProbeAndDoctorNeedNoStoredCredential()
     {
         var session = new CoreProcessSession(Helper);
@@ -147,8 +175,25 @@ public sealed class CoreProcessSessionTests
         Assert.Contains("stderr-drained", error);
         string[] args = JsonSerializer.Deserialize<string[]>(output.First())!;
         Assert.DoesNotContain(options.Password, args);
-        Assert.Contains(options.Username, args);
+        Assert.Contains("[账号已隐藏]", args);
+        Assert.Contains("username-sha256:" + Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(options.Username))), output);
+        Assert.DoesNotContain(options.Username, string.Join("\n", output));
         Assert.DoesNotContain(options.Password, string.Join("\n", output));
+    }
+
+    [Theory]
+    [InlineData("student123", "123", "[凭据已隐藏]")]
+    [InlineData("123", "student123", "[账号已隐藏]")]
+    [InlineData("student123", "student123", "[凭据已隐藏]")]
+    public async Task ChildOutputRedactsOverlappingCredentialsBeforeDeliveringCallbacks(string username, string password, string hidden)
+    {
+        var output = new ConcurrentQueue<string>();
+        int code = await new CoreProcessSession(Helper).RunAsync(new(username, password), output.Enqueue,
+            _ => { }, TestContext.Current.CancellationToken);
+        Assert.Equal(17, code);
+        string[] arguments = JsonSerializer.Deserialize<string[]>(output.First())!;
+        Assert.Equal(hidden, arguments[Array.IndexOf(arguments, "--username") + 1]);
+        Assert.DoesNotContain("student", string.Join('\n', output));
     }
 
     [Fact]

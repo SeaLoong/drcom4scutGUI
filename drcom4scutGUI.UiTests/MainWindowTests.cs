@@ -94,6 +94,7 @@ public sealed class MainWindowTests
             ComboBox modes = Find<ComboBox>(window, "modeComboBox");
             StackPanel portal = Find<StackPanel>(window, "portalPanel");
             Assert.Equal(3, modes.Items.Count);
+            Assert.Equal("有线网络", modes.SelectedItem?.ToString());
             Assert.False(portal.IsVisible);
             modes.SelectedIndex = 1;
             Assert.Equal("eap", configuration.Mode);
@@ -103,6 +104,9 @@ public sealed class MainWindowTests
             Assert.Equal("portal", configuration.Mode);
             Assert.False(configuration.NoUdp);
             Assert.True(portal.IsVisible);
+            Expander advanced = Find<Expander>(window, "advancedPortalExpander");
+            Assert.False(advanced.IsExpanded);
+            Assert.Equal("更多网页设置（通常留空）", advanced.Header);
             Assert.NotNull(Find<CheckBox>(window, "allowHttpCheckBox"));
             modes.SelectedIndex = 0;
             Assert.Equal("eap", configuration.Mode);
@@ -174,15 +178,15 @@ public sealed class MainWindowTests
         {
             TextBlock status = Find<TextBlock>(window, "statusLabel");
             window.ApplyConnectionStatus(new(CoreConnectionPhase.UdpAuthentication), "eap", false);
-            Assert.Contains("正在建立 UDP", status.Text);
+            Assert.Contains("正在确认连接", status.Text);
             window.ApplyConnectionStatus(new(CoreConnectionPhase.Online), "eap", false);
-            Assert.Contains("UDP 心跳均成功", status.Text);
+            Assert.Contains("已连接，可以上网了", status.Text);
             Assert.True(window.IsVisible);
             window.ApplyConnectionStatus(new(CoreConnectionPhase.Offline), "eap", false);
-            Assert.Contains("重试", status.Text);
+            Assert.Contains("正在自动重连", status.Text);
             Assert.True(window.IsVisible);
             window.ApplyConnectionStatus(new(CoreConnectionPhase.Online), "portal", false);
-            Assert.Contains("门户已确认在线", status.Text);
+            Assert.Contains("已连接，可以上网了", status.Text);
             Assert.True(window.IsVisible);
         }
         finally { window.Close(); }

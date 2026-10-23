@@ -5,6 +5,31 @@ namespace drcom4scutGUI.Tests;
 public sealed class DiagnosticsBufferTests
 {
     [Fact]
+    public void StoredDiagnosticsStayRedactedAfterAnAccountIsChangedOrDeleted()
+    {
+        var log = new DiagnosticsBuffer();
+        log.Add("first-student: password=first-secret, retry", "first-student", "first-secret");
+        log.Add("second-student: online", "second-student", "second-secret");
+        string text = log.Export();
+        Assert.DoesNotContain("first-student", text);
+        Assert.DoesNotContain("first-secret", text);
+        Assert.DoesNotContain("second-student", text);
+        Assert.Contains("retry", text);
+        Assert.Contains("online", text);
+    }
+
+    [Fact]
+    public void RedactionPrecedesTruncationSoNoCredentialPrefixSurvives()
+    {
+        const string password = "synthetic-private-password";
+        var log = new DiagnosticsBuffer();
+        log.Add(new string('x', 2040) + password, password: password);
+        string text = log.Export();
+        Assert.DoesNotContain("synthetic", text);
+        Assert.Contains("[密码已隐藏]", text);
+    }
+
+    [Fact]
     public void ExportKeepsUsefulContextButRedactsEveryCredentialOccurrence()
     {
         var log = new DiagnosticsBuffer();

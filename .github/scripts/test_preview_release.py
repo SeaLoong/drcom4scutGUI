@@ -17,7 +17,7 @@ spec = importlib.util.spec_from_file_location("publish_preview", SCRIPT)
 preview = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(preview)
 
-REPOSITORY = "SeaLoong/drcom4scut"
+REPOSITORY = "SeaLoong/drcom4scutGUI"
 SHA = "a" * 40
 ENVIRONMENT = {
     "GITHUB_REPOSITORY": REPOSITORY,
@@ -279,7 +279,7 @@ class PreviewTests(unittest.TestCase):
         self.assertIn("--latest=false", calls[2])
         self.assertIn("--draft=false", calls[2])
         self.assertFalse(any(argument in ("--clobber", "--force", "--cleanup-tag") for command in calls for argument in command))
-        self.assertEqual(calls[3], ["gh", "api", "--method", "DELETE", "repos/SeaLoong/drcom4scut/releases/123"])
+        self.assertEqual(calls[3], ["gh", "api", "--method", "DELETE", "repos/SeaLoong/drcom4scutGUI/releases/123"])
 
     def test_cli_tag_check_allows_missing_draft_tag_but_requires_exact_public_target(self):
         api = preview.GitHubReleases(REPOSITORY)
