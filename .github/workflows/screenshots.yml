@@ -1,0 +1,109 @@
+name: Capture native desktop screenshots
+
+on:
+  workflow_dispatch:
+    inputs:
+      core_ref:
+        description: Core commit or ref to build for the screenshots
+        required: true
+        default: d7e2c73ffe69c1f5cabddaf6ffd2ab21eb422575
+  push:
+    branches: [master]
+    paths:
+      - .github/workflows/screenshots.yml
+      - .github/scripts/capture_gui.py
+      - .github/scripts/capture_window.swift
+      - .github/scripts/capture_cli_screenshots.py
+
+permissions:
+  contents: read
+
+concurrency:
+  group: desktop-screenshots-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  DOTNET_NOLOGO: "1"
+  DOTNET_CLI_TELEMETRY_OPTOUT: "1"
+
+jobs:
+  capture:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            runtime: linux-x64
+            suffix: ''
+          - os: windows-latest
+            runtime: win-x64
+            suffix: .exe
+          - os: macos-15
+            runtime: osx-arm64
+            suffix: ''
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Check out the real core used by the screenshots
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: SeaLoong/drcom4scut
+          ref: ${{ inputs.core_ref || 'd7e2c73ffe69c1f5cabddaf6ffd2ab21eb422575' }}
+          path: artifacts/capture-core
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.14'
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          dotnet-version: 10.0.x
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+      - name: Install Linux desktop capture dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y xvfb xauth xfwm4 x11-utils imagemagick dbus-x11 libice6 libsm6 libfontconfig1 libx11-6 libxcb1 libxrandr2 libxi6 libxcursor1 libxrender1 libgl1 libgtk-3-0t64 fonts-dejavu-core fonts-noto-cjk
+      - name: Install the Windows core's packet-capture SDK
+        if: runner.os == 'Windows'
+        uses: ./artifacts/capture-core/.github/actions/setup-npcap
+        with:
+          architecture: x64
+      - name: Build the real core
+        id: corebuild
+        working-directory: artifacts/capture-core
+        run: cargo +stable build --locked
+      - name: Build the native desktop application
+        id: guibuild
+        run: |
+          dotnet restore drcom4scutGUI/drcom4scutGUI.csproj --locked-mode
+          dotnet publish drcom4scutGUI/drcom4scutGUI.csproj --configuration Release --runtime ${{ matrix.runtime }} --self-contained true --no-restore --output artifacts/capture-app -warnaserror
+      - name: Photograph the actual Linux windows
+        if: runner.os == 'Linux'
+        run: |
+          xvfb-run --auto-servernum --server-args='-screen 0 1280x1200x24 -nolisten tcp' dbus-run-session -- bash -euo pipefail -c '
+            xfwm4 --compositor=off > artifacts/window-manager.log 2>&1 &
+            window_manager_pid=$!
+            trap "kill $window_manager_pid 2>/dev/null || true" EXIT
+            python3 .github/scripts/capture_gui.py --gui artifacts/capture-app/drcom4scutGUI --core artifacts/capture-core/target/debug/drcom4scut --core-source artifacts/capture-core --output artifacts/screenshots
+          '
+      - name: Photograph the actual Windows or macOS windows
+        if: runner.os != 'Linux'
+        shell: bash
+        run: python .github/scripts/capture_gui.py --gui "artifacts/capture-app/drcom4scutGUI${{ matrix.suffix }}" --core "artifacts/capture-core/target/debug/drcom4scut${{ matrix.suffix }}" --core-source artifacts/capture-core --output artifacts/screenshots
+      - name: Photograph native PowerShell or Terminal usage
+        if: ${{ !cancelled() && runner.os != 'Linux' && steps.corebuild.outcome == 'success' }}
+        shell: bash
+        run: python .github/scripts/capture_cli_screenshots.py --core "artifacts/capture-core/target/debug/drcom4scut${{ matrix.suffix }}" --core-source artifacts/capture-core --output artifacts/screenshots
+      - name: Upload native screenshots and capture provenance
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: desktop-screenshots-${{ matrix.runtime }}
+          path: |
+            artifacts/screenshots/
+            artifacts/window-manager.log
+          if-no-files-found: error
+          retention-days: 14
