@@ -45,6 +45,7 @@ Linux 实际运行截图，使用示例账号，处于连接前状态。查看�
 | --- | --- |
 | 首次运行、Mac 打开提示、Linux 授权 | [各系统安装步骤](docs/usage.md#安装和系统要求) |
 | 多个账号、自动连接、托盘与退出 | [日常操作](docs/usage.md#多账号) |
+| 检查新版本、更新界面或核心 | [更新程序](docs/update.md) |
 | 连接失败、找不到核心、密码无法保存 | [常见问题](docs/usage.md#排查连接问题) |
 | 了解密码保存、导出日志 | [账号、密码与诊断](docs/security.md) |
 | 在 OpenWrt 路由器上使用 | [路由器指南](https://github.com/SeaLoong/drcom4scut/blob/master/docs/openwrt.md) |

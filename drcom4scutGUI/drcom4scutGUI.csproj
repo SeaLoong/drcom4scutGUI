@@ -6,6 +6,7 @@
     <RootNamespace>drcom4scutGUI</RootNamespace>
     <AssemblyName>drcom4scutGUI</AssemblyName>
     <ApplicationIcon>DrClient.ico</ApplicationIcon>
+    <DefineConstants Condition="'$(ScreenshotCapture)' == 'true'">$(DefineConstants);SCREENSHOT_CAPTURE</DefineConstants>
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="Avalonia.Desktop" Version="12.1.4" />

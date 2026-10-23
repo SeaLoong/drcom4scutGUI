@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Photograph the native application with an isolated, password-free demo account.
 
-The GUI and core are real binaries. The script never clicks Connect, saves a
-password, changes login startup, or renders a replacement/headless interface.
+The GUI and core are real binaries. A compile-only capture capability supplies
+local release responses to the real updater and opens its actual controls and
+dialogs. No campus authentication, download, or update installation is attempted.
 """
 from __future__ import annotations
 
@@ -119,7 +120,7 @@ def capture_windows(pid: int | None, destination: Path, title_fragment: str = RE
     elif not user.GetWindowRect(hwnd, ctypes.byref(rect)):
         raise ctypes.WinError(ctypes.get_last_error())
     width, height = rect.right - rect.left, rect.bottom - rect.top
-    if not (400 <= width <= 4000 and 400 <= height <= 4000):
+    if not (200 <= width <= 4000 and 100 <= height <= 4000):
         raise RuntimeError("Native window dimensions are outside the capture budget")
     screen = user.GetDC(None)
     memory = gdi.CreateCompatibleDC(screen)
@@ -192,6 +193,69 @@ def example_configuration(mode: str) -> dict:
             "portalAcIp": "", "portalClientIp": "", "allowHttp": False}
 
 
+def native_runtime(system: str, machine: str) -> str:
+    architecture = {"x86_64": "x64", "amd64": "x64", "arm64": "arm64", "aarch64": "arm64"}.get(machine.lower())
+    if architecture is None:
+        raise ValueError("Native screenshot capture requires x64 or ARM64")
+    return {"Windows": "win", "Darwin": "osx", "Linux": "linux"}[system] + "-" + architecture
+
+
+def simulated_release(component: str, version: str, runtime: str, source: str) -> dict:
+    """Local metadata only: assets are deliberately never downloaded."""
+    repository = "SeaLoong/" + component
+    core_targets = {"win-x64": "x86_64-pc-windows-msvc", "win-arm64": "aarch64-pc-windows-msvc",
+                    "linux-x64": "x86_64-unknown-linux-gnu", "linux-arm64": "aarch64-unknown-linux-gnu",
+                    "osx-x64": "x86_64-apple-darwin", "osx-arm64": "aarch64-apple-darwin"}
+    target = core_targets[runtime] if component == "drcom4scut" else runtime
+    extension = "zip" if runtime.startswith("win-") else "tar.gz"
+    archive = f"{component}-{version}-{target}.{extension}"
+    tag = "v" + version
+    release_id = 990001 if component == "drcom4scutGUI" else 990002
+    return {"id": release_id, "url": f"https://api.github.com/repos/{repository}/releases/{release_id}",
+            "html_url": f"https://github.com/{repository}/releases/tag/{tag}",
+            "tag_name": tag, "target_commitish": source, "draft": False, "prerelease": False,
+            "name": "Local screenshot fixture: simulated release availability",
+            "assets": [{"id": release_id + offset, "name": name, "state": "uploaded", "size": 1,
+                        "digest": "sha256:" + "0" * 64,
+                        "browser_download_url": f"https://github.com/{repository}/releases/download/{tag}/{name}"}
+                       for offset, name in enumerate((archive, "SHA256SUMS"), start=1)]}
+
+
+def next_patch(version: str) -> str:
+    if not re.fullmatch(r"\d+\.\d+\.\d+", version):
+        raise ValueError("Screenshot fixtures require formal semantic versions")
+    major, minor, patch = map(int, version.split("."))
+    return f"{major}.{minor}.{patch + 1}"
+
+
+def capture_fixture(scene: str, mode: str, gui_version: str, core_version: str,
+                    runtime: str, gui_sha: str, core_sha: str) -> dict:
+    available = scene in ("available", "confirm")
+    return {"schema": 1, "guiVersion": gui_version, "coreVersion": core_version,
+            "configuration": example_configuration(mode),
+            "mockUpdateAvailability": True, "campusAuthentication": False,
+            "gui": simulated_release("drcom4scutGUI", next_patch(gui_version) if available else gui_version, runtime, gui_sha),
+            "core": simulated_release("drcom4scut", next_patch(core_version) if available else core_version, runtime, core_sha)}
+
+
+def wait_for_capture_ready(process: subprocess.Popen, ready: Path, scenario: str, timeout: float = 45) -> dict:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if process.poll() is not None:
+            raise RuntimeError(f"The capture GUI exited with status {process.returncode}; inspect the scene log")
+        if ready.exists():
+            document = json.loads(ready.read_text(encoding="utf-8-sig"))
+            expected_requests = {"idle": 0, "current": 1, "available": 2, "confirm": 1}[scenario]
+            if (document.get("scenario") != scenario or not document.get("windowTitle")
+                    or len(document.get("requests", [])) != expected_requests
+                    or document.get("mockUpdateAvailability") is not True
+                    or document.get("campusAuthentication") is not False):
+                raise RuntimeError("The native application did not confirm the requested local fixture scenario")
+            return document
+        time.sleep(0.1)
+    raise RuntimeError("The GUI did not settle the capture scenario; publish with -p:ScreenshotCapture=true and inspect the scene log")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--gui", type=Path, required=True)
@@ -205,9 +269,14 @@ def main() -> None:
     slug = {"Windows": "windows", "Darwin": "macos", "Linux": "linux"}[system]
     gui_sha = run("git", "-C", str(ROOT), "rev-parse", "HEAD")
     core_sha = run("git", "-C", str(args.core_source), "rev-parse", "HEAD")
+    gui_dirty = bool(run("git", "-C", str(ROOT), "status", "--porcelain", "--untracked-files=normal"))
+    core_dirty = bool(run("git", "-C", str(args.core_source), "status", "--porcelain", "--untracked-files=normal"))
     core_version = run(str(core), "--version")
+    core_semver = re.fullmatch(r"drcom4scut (\d+\.\d+\.\d+)", core_version)
+    if core_semver is None:
+        raise RuntimeError("The staged core did not report a formal semantic version")
+    runtime = native_runtime(system, platform.machine())
     version = re.search(r"<Version>([^<]+)</Version>", (ROOT / "Directory.Build.props").read_text()).group(1)
-    expected_title = f"drcom4scutGUI {version} — {core_version}"
     output.mkdir(parents=True, exist_ok=True)
     (output / "screenshots.json").unlink(missing_ok=True)
     # Capture a staged publish directory, not an installed .app or user account.
@@ -231,21 +300,35 @@ def main() -> None:
                 helper = Path(temporary) / "capture-window"
                 if system == "Darwin":
                     subprocess.run(["swiftc", str(ROOT / ".github/scripts/capture_window.swift"), "-o", str(helper)], check=True)
-                for scene, mode in [("main", "eap"), ("portal", "portal")]:
+                for scene, mode, scenario, title in [
+                    ("main", "eap", "idle", "有线连接窗口"),
+                    ("portal", "portal", "idle", "校园网页认证窗口"),
+                    ("update-current", "eap", "current", "手动检查：当前版本已是最新"),
+                    ("update-available", "eap", "available", "图形界面与核心的新版本提示"),
+                    ("update-confirm", "eap", "confirm", "更新图形界面的确认对话框"),
+                ]:
                     config = directory / "config.json"
                     config.write_text(json.dumps(example_configuration(mode), ensure_ascii=False), encoding="utf-8")
                     config.chmod(0o600)
                     image = output / f"gui-{slug}-{scene}.png"
                     image.unlink(missing_ok=True)
+                    fixture_file = output / f"gui-{slug}-{scene}.fixture.json"
+                    fixture = capture_fixture(scenario, mode, version, core_semver[1], runtime, gui_sha, core_sha)
+                    fixture_file.write_text(json.dumps(fixture, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+                    ready = Path(temporary) / f"{scene}.ready.json"
+                    command = [str(gui), f"--capture-update={scenario}",
+                               f"--capture-update-fixture={fixture_file}", f"--capture-ready-file={ready}"]
                     with (output / f"gui-{slug}-{scene}.log").open("wb") as log:
-                        process = subprocess.Popen([str(gui)], cwd=gui.parent, env=environment, stdout=log, stderr=subprocess.STDOUT)
+                        process = subprocess.Popen(command, cwd=gui.parent, env=environment, stdout=log, stderr=subprocess.STDOUT)
                         try:
+                            settled = wait_for_capture_ready(process, ready, scenario)
+                            capture_title = settled["windowTitle"]
                             if system == "Windows":
-                                capture_windows(process.pid, image, expected_title, client_area=True)
+                                capture_windows(process.pid, image, capture_title, client_area=True)
                             elif system == "Darwin":
-                                capture_macos(process.pid, image, expected_title, helper=helper)
+                                capture_macos(process.pid, image, capture_title, helper=helper)
                             else:
-                                capture_linux(process.pid, image, expected_title)
+                                capture_linux(process.pid, image, capture_title)
                             if process.poll() is not None:
                                 raise RuntimeError("The GUI exited before its screenshot was verified")
                         finally:
@@ -260,12 +343,20 @@ def main() -> None:
                         raise RuntimeError("The native capture did not produce a PNG image")
                     width, height = struct.unpack(">II", data[16:24])
                     manifest.append({"file": image.name, "platform": platform_name, "kind": "GUI", "version": version,
-                                     "title": "有线连接窗口" if scene == "main" else "校园网页认证窗口",
-                                     "description": "示例账号 student-demo，密码为空，未发起校园网认证。",
+                                     "title": title,
+                                     "description": "示例账号 student-demo，密码为空，未发起校园网认证。" +
+                                         ("更新信息来自本地模拟发布响应，未下载或安装更新。" if scenario != "idle" else ""),
                                      "capture": ("实际 Windows 原生应用内容区域" if system == "Windows" else
                                                  f"实际 {platform_name} 原生应用窗口" + ("（X11 虚拟显示器）" if system == "Linux" else "")),
                                      "width": width, "height": height, "gui_commit": gui_sha, "core_commit": core_sha,
+                                     "gui_source_dirty": gui_dirty, "core_source_dirty": core_dirty,
                                      "core_version": core_version, "sha256": hashlib.sha256(data).hexdigest(),
+                                     "capture_build": "SCREENSHOT_CAPTURE", "update_scenario": scenario,
+                                     "mock_update_availability": scenario != "idle", "campus_authentication": False,
+                                     "fixture": fixture_file.name, "fixture_sha256": hashlib.sha256(fixture_file.read_bytes()).hexdigest(),
+                                     "fixture_requests": settled["requests"], "window_title": capture_title,
+                                     "simulated_gui_release": fixture["gui"]["tag_name"],
+                                     "simulated_core_release": fixture["core"]["tag_name"],
                                      "gui_executable_sha256": hashlib.sha256(gui.read_bytes()).hexdigest(),
                                      "core_executable_sha256": hashlib.sha256(core.read_bytes()).hexdigest()})
             finally:

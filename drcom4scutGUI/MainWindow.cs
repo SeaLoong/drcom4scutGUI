@@ -18,13 +18,17 @@ using Avalonia.Threading;
 
 namespace drcom4scutGUI;
 
-public sealed class MainWindow : Window
+public sealed partial class MainWindow : Window
 {
     private readonly bool skipBackend;
     private readonly ConfigurationStore store;
     private readonly CoreProcessSession core;
     private readonly CancellationTokenSource lifetime = new();
     private readonly DiagnosticsBuffer diagnostics = new();
+    private readonly UpdateController updates;
+    private readonly Func<string, string, bool, Task<bool>>? updateDialog;
+    private bool reconnectAfterCoreUpdate;
+    private bool updateStoppedCore;
     private Configuration config;
     private Account? current;
     private TrayIcon? tray;
@@ -57,6 +61,12 @@ public sealed class MainWindow : Window
     private readonly Button loginButton = new() { Name = "loginButton", Content = "连接", MinWidth = 86, IsDefault = true };
     private readonly Button deleteButton = new() { Name = "deleteButton", Content = "删除", IsEnabled = false };
     private readonly Button doctorButton = new() { Name = "doctorButton", Content = "环境自检" };
+    private readonly Button checkUpdateButton = new() { Name = "checkUpdateButton", Content = "检查更新" };
+    private readonly Button checkCoreUpdateButton = new() { Name = "checkCoreUpdateButton", Content = "检查核心更新" };
+    private readonly StackPanel updatePanel = new() { Name = "updatePanel", Spacing = 6, IsVisible = false };
+    private readonly Button guiUpdateNotice = new() { Name = "guiUpdateNotice", IsVisible = false, HorizontalAlignment = HorizontalAlignment.Stretch, HorizontalContentAlignment = HorizontalAlignment.Left };
+    private readonly Button coreUpdateNotice = new() { Name = "coreUpdateNotice", IsVisible = false, HorizontalAlignment = HorizontalAlignment.Stretch, HorizontalContentAlignment = HorizontalAlignment.Left };
+    private readonly TextBlock updateProgress = new() { Name = "updateProgress", IsVisible = false, TextWrapping = TextWrapping.Wrap };
     private readonly TextBlock label = new() { Name = "statusLabel", Text = "正在检查核心和账号配置…", TextWrapping = TextWrapping.Wrap };
     private readonly TextBox logTextBox = new() { Name = "logTextBox", IsReadOnly = true, AcceptsReturn = true, Height = 150, TextWrapping = TextWrapping.Wrap };
 
@@ -67,8 +77,13 @@ public sealed class MainWindow : Window
 
     /// <summary>skipBackend is used by native rendering probes and headless UI tests.</summary>
     public MainWindow(bool skipBackend = false, Configuration? initialConfiguration = null)
+        : this(skipBackend, initialConfiguration, null, null, null) { }
+
+    internal MainWindow(bool skipBackend, Configuration? initialConfiguration, IUpdateClient? updateClient,
+        TimeProvider? timeProvider, Func<string, string, bool, Task<bool>>? updateDialog)
     {
         this.skipBackend = skipBackend;
+        this.updateDialog = updateDialog;
         config = initialConfiguration ?? new Configuration();
         string directory = PlatformPaths.ConfigurationDirectory;
         string legacy = Path.Combine(AppContext.BaseDirectory, "drcom4scutGUI.json");
@@ -76,6 +91,14 @@ public sealed class MainWindow : Window
         store = new ConfigurationStore(Path.Combine(directory, "config.json"),
             skipBackend ? new DisabledProtector() : SecretProtectorFactory.Create(), legacy);
         core = new CoreProcessSession(PlatformPaths.CoreExecutablePath);
+        updates = new UpdateController(updateClient ?? (skipBackend ? new PreviewUpdateClient() : new DesktopUpdateClient(
+            component => component == UpdateComponent.Gui ? GuiVersion : coreVersion)), timeProvider ?? TimeProvider.System,
+            ConfirmUpdateAsync, MessageUpdateAsync, BeforeUpdateInstallAsync, AfterUpdateInstallAsync);
+        updates.Changed += () =>
+        {
+            if (Dispatcher.UIThread.CheckAccess()) RefreshUpdateUI();
+            else Dispatcher.UIThread.Post(RefreshUpdateUI);
+        };
         Title = $"drcom4scutGUI {GuiVersion}";
         Width = 560;
         Height = 740;
@@ -94,6 +117,10 @@ public sealed class MainWindow : Window
         loginButton.Click += async (_, _) => { if (sessionTask is null) await StartCoreAsync(); else await StopCoreAsync(); };
         deleteButton.Click += async (_, _) => await DeleteAccountAsync();
         doctorButton.Click += async (_, _) => await DoctorAsync();
+        checkUpdateButton.Click += async (_, _) => await updates.CheckAsync(UpdateComponent.Gui, manual: true);
+        checkCoreUpdateButton.Click += async (_, _) => await updates.CheckAsync(UpdateComponent.Core, manual: true);
+        guiUpdateNotice.Click += async (_, _) => await updates.InstallAsync(UpdateComponent.Gui);
+        coreUpdateNotice.Click += async (_, _) => await updates.InstallAsync(UpdateComponent.Core);
         Opened += async (_, _) => await InitializeAsync();
         Closing += WindowClosing;
         if (skipBackend) InitUI();
@@ -138,6 +165,10 @@ public sealed class MainWindow : Window
         Grid.SetColumn(loginButton, 1);
         controls.Children.Add(loginButton);
         fields.Children.Add(controls);
+        updatePanel.Children.Add(guiUpdateNotice);
+        updatePanel.Children.Add(coreUpdateNotice);
+        updatePanel.Children.Add(updateProgress);
+        fields.Children.Add(updatePanel);
         fields.Children.Add(new Border { Child = label, Padding = new Thickness(9), BorderThickness = new Thickness(1), BorderBrush = Brushes.Gray, CornerRadius = new CornerRadius(4) });
         StackPanel tools = new() { Orientation = Orientation.Horizontal, Spacing = 8 };
         tools.Children.Add(doctorButton);
@@ -145,6 +176,10 @@ public sealed class MainWindow : Window
         export.Click += async (_, _) => await ExportAsync();
         tools.Children.Add(export);
         fields.Children.Add(tools);
+        StackPanel updateTools = new() { Orientation = Orientation.Horizontal, Spacing = 8 };
+        updateTools.Children.Add(checkUpdateButton);
+        updateTools.Children.Add(checkCoreUpdateButton);
+        fields.Children.Add(updateTools);
         fields.Children.Add(logTextBox);
         Content = new ScrollViewer { Content = fields, HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled };
     }
@@ -174,7 +209,7 @@ public sealed class MainWindow : Window
             InitUI();
             InitTray();
             coreVersion = await core.VerifyCoreAsync(lifetime.Token);
-            Title = $"drcom4scutGUI {GuiVersion} — {coreVersion}";
+            RefreshUpdateUI();
             label.Text = "准备好了。选择网络，填写账号和密码，然后点击“连接”。";
             loginButton.IsEnabled = true;
             if (current is { Password.Length: > 0 } && config.Auto) await StartCoreAsync();
@@ -408,6 +443,8 @@ public sealed class MainWindow : Window
     {
         if (state.IsOnline)
         {
+            // Online is emitted only after every stage of the selected mode succeeds.
+            updates.ConnectionSucceeded();
             label.Text = eapOnly && mode == "eap" ? "网线认证已通过。" : "已连接，可以上网了。";
             if (!authenticated)
             {
@@ -441,6 +478,92 @@ public sealed class MainWindow : Window
             catch (Exception error) { diagnostics.Add(error.Message); }
         }
         if (!closing) { label.Text = "已停止。"; loginButton.IsEnabled = true; ShowAndActivate(); }
+    }
+
+    private Task<bool> ConfirmUpdateAsync(UpdateComponent component, string prompt)
+    {
+        ShowAndActivate();
+        string details = component == UpdateComponent.Gui
+            ? "\n更新期间将断开连接并重启图形界面。未记住的密码需在重启后重新输入。"
+            : "\n更新期间将短暂断开连接；更新完成后会恢复本次连接。";
+        string title = component == UpdateComponent.Gui ? "更新图形界面" : "更新核心";
+        return updateDialog is null ? ConfirmAsync(prompt + details, title) : updateDialog(prompt + details, title, true);
+    }
+
+    private async Task MessageUpdateAsync(string message, string title)
+    {
+        if (closing) return;
+        ShowAndActivate();
+        if (updateDialog is null) await MessageAsync(message, title);
+        else await updateDialog(message, title, false);
+    }
+
+    private async Task BeforeUpdateInstallAsync(UpdateComponent component)
+    {
+        reconnectAfterCoreUpdate = component == UpdateComponent.Core && sessionTask is not null;
+        await StopCoreAsync();
+        updateStoppedCore = true;
+        SetUIEnabled(false);
+        loginButton.IsEnabled = false;
+    }
+
+    private async Task AfterUpdateInstallAsync(UpdateComponent component)
+    {
+        if (component == UpdateComponent.Gui)
+        {
+            Close();
+            return;
+        }
+        try
+        {
+            if (!skipBackend) coreVersion = await core.VerifyCoreAsync(lifetime.Token);
+            RefreshUpdateUI();
+            label.Text = "核心已更新，可以连接。";
+        }
+        finally
+        {
+            updateStoppedCore = false;
+            SetUIEnabled(true);
+            loginButton.IsEnabled = true;
+        }
+        if (reconnectAfterCoreUpdate && !closing) _ = StartCoreAsync();
+        reconnectAfterCoreUpdate = false;
+    }
+
+    private void RefreshUpdateUI()
+    {
+        if (closing) return;
+        Title = $"drcom4scutGUI {GuiVersion}" + (coreVersion.Length == 0 ? "" : $" — {coreVersion}");
+        bool guiAvailable = updates.Offers.TryGetValue(UpdateComponent.Gui, out UpdateOffer? guiOffer);
+        bool coreAvailable = updates.Offers.TryGetValue(UpdateComponent.Core, out UpdateOffer? coreOffer);
+        guiUpdateNotice.IsVisible = guiAvailable;
+        coreUpdateNotice.IsVisible = coreAvailable;
+        if (guiAvailable)
+        {
+            guiUpdateNotice.Content = $"图形界面 {guiOffer!.Version} 可更新，点击查看";
+            Title += $" · GUI {guiOffer.Version} 可更新";
+        }
+        if (coreAvailable)
+        {
+            coreUpdateNotice.Content = $"核心 {coreOffer!.Version} 可更新，点击查看";
+            Title += $" · 核心 {coreOffer.Version} 可更新";
+        }
+        updateProgress.Text = updates.ProgressText;
+        updateProgress.IsVisible = updates.ProgressText is not null;
+        updatePanel.IsVisible = guiAvailable || coreAvailable || updateProgress.IsVisible;
+        checkUpdateButton.IsEnabled = !updates.IsBusy;
+        checkCoreUpdateButton.IsEnabled = !updates.IsBusy;
+        doctorButton.IsEnabled = !updates.IsBusy;
+        guiUpdateNotice.IsEnabled = !updates.IsBusy;
+        coreUpdateNotice.IsEnabled = !updates.IsBusy;
+        if (!updates.IsBusy && updateStoppedCore)
+        {
+            // Failed installation keeps the existing password only in this process.
+            updateStoppedCore = false;
+            reconnectAfterCoreUpdate = false;
+            SetUIEnabled(true);
+            loginButton.IsEnabled = true;
+        }
     }
 
     private void SetUIEnabled(bool enabled)
@@ -541,10 +664,12 @@ public sealed class MainWindow : Window
 
     private async void WindowClosing(object? sender, WindowClosingEventArgs e)
     {
-        if (closeAllowed || skipBackend) return;
+        if (closeAllowed) return;
+        if (skipBackend) { updates.Dispose(); lifetime.Cancel(); return; }
         e.Cancel = true;
         if (closing) return;
         closing = true;
+        updates.Dispose();
         lifetime.Cancel();
         await StopCoreAsync();
         tray?.Dispose();

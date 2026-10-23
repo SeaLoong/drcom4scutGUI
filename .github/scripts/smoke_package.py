@@ -2,6 +2,7 @@
 
 import argparse
 import importlib.util
+import json
 from pathlib import Path
 import subprocess
 import tarfile
@@ -28,6 +29,18 @@ def smoke(runtime):
         executable = Path(directory) / stem / packager.executable_relative(runtime)
         if runtime.startswith("osx-"):
             packager.verify_app_bundle(Path(directory) / stem / "drcom4scutGUI.app")
+        # Exercise the actual distributed binary: screenshot transport injection
+        # must be absent from every normal native release, on all six runners.
+        capture_fixture = Path(directory) / "capture-probe.json"
+        capture_fixture.write_text(json.dumps({"schema": 1, "guiVersion": packager.version(), "coreVersion": "0.0.0",
+                                              "configuration": {"accounts": [], "auto": False},
+                                              "gui": {}, "core": {}}), encoding="utf-8")
+        capture_probe = subprocess.run([str(executable), "--capture-update=idle",
+                                       f"--capture-update-fixture={capture_fixture}",
+                                       f"--capture-ready-file={Path(directory) / 'capture-ready.json'}"],
+                                      cwd=executable.parent, timeout=15)
+        if capture_probe.returncode != 2:
+            raise RuntimeError("The production GUI package accepted screenshot capture arguments")
         subprocess.run([str(executable), "--smoke-test"], cwd=executable.parent, check=True, timeout=45)
 
 

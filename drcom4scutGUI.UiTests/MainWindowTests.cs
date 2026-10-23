@@ -13,6 +13,7 @@ public static class TestAppBuilder
     public static AppBuilder BuildAvaloniaApp() => AppBuilder.Configure<App>().UseHeadless(new AvaloniaHeadlessPlatformOptions()).WithInterFont();
 }
 
+[Collection("Avalonia UI")]
 public sealed class MainWindowTests
 {
     private static T Find<T>(MainWindow window, string name) where T : Control =>

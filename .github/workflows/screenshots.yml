@@ -6,7 +6,7 @@ on:
       core_ref:
         description: Core commit or ref to build for the screenshots
         required: true
-        default: d7e2c73ffe69c1f5cabddaf6ffd2ab21eb422575
+        default: master
   push:
     branches: [master]
     paths:
@@ -14,6 +14,7 @@ on:
       - .github/scripts/capture_gui.py
       - .github/scripts/capture_window.swift
       - .github/scripts/capture_cli_screenshots.py
+      - drcom4scutGUI/MainWindow.UpdateCapture.cs
 
 permissions:
   contents: read
@@ -51,7 +52,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: SeaLoong/drcom4scut
-          ref: ${{ inputs.core_ref || 'd7e2c73ffe69c1f5cabddaf6ffd2ab21eb422575' }}
+          ref: ${{ inputs.core_ref || 'master' }}
           path: artifacts/capture-core
           persist-credentials: false
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
@@ -82,11 +83,11 @@ jobs:
         id: corebuild
         working-directory: artifacts/capture-core
         run: cargo +stable build --locked
-      - name: Build the native desktop application
+      - name: Build native screenshot capability with local update fixtures
         id: guibuild
         run: |
           dotnet restore drcom4scutGUI/drcom4scutGUI.csproj --locked-mode
-          dotnet publish drcom4scutGUI/drcom4scutGUI.csproj --configuration Release --runtime ${{ matrix.runtime }} --self-contained true --no-restore --output artifacts/capture-app -warnaserror
+          dotnet publish drcom4scutGUI/drcom4scutGUI.csproj --configuration Release --runtime ${{ matrix.runtime }} --self-contained true --no-restore --output artifacts/capture-app -p:ScreenshotCapture=true -warnaserror
       - name: Photograph the actual Linux windows
         if: runner.os == 'Linux'
         run: |

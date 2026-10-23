@@ -96,6 +96,9 @@ jobs:
       - name: Package native GUI and validate executable ABI
         shell: bash
         run: python .github/scripts/package_release.py --runtime ${{ matrix.runtime }} --publish-dir artifacts/publish/${{ matrix.runtime }}
+      - name: Install the exact GUI archive in an isolated native update transaction
+        shell: bash
+        run: python .github/scripts/test_update_package.py --runtime ${{ matrix.runtime }}
       - name: Launch the actual Linux release GUI in a virtual display
         if: runner.os == 'Linux'
         run: xvfb-run --auto-servernum python3 .github/scripts/smoke_package.py --runtime ${{ matrix.runtime }}
@@ -118,5 +121,6 @@ jobs:
           path: |
             artifacts/test-results/*.trx
             artifacts/ui-test-results/*.trx
+            artifacts/update-package-results/
           if-no-files-found: warn
           retention-days: 14

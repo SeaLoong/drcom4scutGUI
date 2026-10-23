@@ -22,7 +22,11 @@ public sealed class App : Application
     {
         if (ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
         {
-            if (!Program.SmokeTest)
+            bool isolatedRun = Program.SmokeTest;
+#if SCREENSHOT_CAPTURE
+            isolatedRun |= MainWindow.UpdateCaptureConfigured;
+#endif
+            if (!isolatedRun)
             {
                 instance = DesktopInstance.TryAcquire(PlatformPaths.ConfigurationDirectory);
                 if (instance is null)
@@ -31,7 +35,13 @@ public sealed class App : Application
                     return;
                 }
             }
+#if SCREENSHOT_CAPTURE
+            desktop.MainWindow = MainWindow.UpdateCaptureConfigured
+                ? MainWindow.CreateUpdateCaptureWindow()
+                : new MainWindow(skipBackend: Program.SmokeTest);
+#else
             desktop.MainWindow = new MainWindow(skipBackend: Program.SmokeTest);
+#endif
             desktop.Exit += (_, _) =>
             {
                 instance?.Dispose();
