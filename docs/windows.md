@@ -91,4 +91,6 @@ Windows 实际运行的程序内容区，使用示例账号，处于连接前状
 
 需要用命令行连接时，按 [Windows 命令行指南](https://github.com/SeaLoong/drcom4scut/blob/master/docs/windows.md)填写配置并运行。包内 `core-help/docs/` 也提供离线命令行帮助。图形界面与命令行选择一种方式连接即可。
 
+窗口中的“检查更新”和“检查核心更新”可分别更新图形界面与核心。操作和 Windows 提示示例见[更新程序](update.md#windows)。
+
 更多操作：[多账号](usage.md#多账号) · [账号与密码](security.md) · [全部常见问题](usage.md#排查连接问题)

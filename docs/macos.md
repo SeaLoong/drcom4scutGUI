@@ -106,6 +106,8 @@ cd "$HOME/校园网客户端"
 
 连接步骤见 [Mac 命令行指南](https://github.com/SeaLoong/drcom4scut/blob/master/docs/macos.md#配置与认证)。包内 `core-help/docs/` 也提供离线命令行帮助。图形界面与命令行共用同一份程序，选择一种方式连接即可。
 
+窗口中的“检查更新”和“检查核心更新”可分别更新图形界面与核心；更新界面后会重新打开应用。操作和 Mac 提示示例见[更新程序](update.md#mac)。
+
 更多操作：[多账号](usage.md#多账号) · [账号与密码](security.md) · [连接排障](usage.md#排查连接问题)
 
 系统兼容范围：[.NET 10 支持的 macOS 版本](https://github.com/dotnet/core/blob/main/release-notes/10.0/supported-os.md)。

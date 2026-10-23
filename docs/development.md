@@ -130,7 +130,7 @@ macOS 打包在 macOS 执行：原生启动程序位于 `.app/Contents/MacOS`，
 
 预览标签为 `preview-运行号-尝试号-提交前8位`，固定到完整源码 SHA；程序版本来自 manifest。流程保留最近 10 个自动预览，清理预览 Release 时保留标签。正式版 **Latest** 保持独立。
 
-正式发布通过 **Actions → Manual GUI release → Run workflow** 手动触发，标签使用 `Directory.Build.props` 中的版本，例如 `v3.2.0`。流程重新验证源码与全部产物，先上传到私有草稿，再核对远端文件校验值、大小和标签提交。`draft` 默认为 `true`，便于维护者检查；选择 `false` 时，校验通过后公开为正式版 **Latest**。发布正文提供中文下载说明、平台选择和本版变更。
+正式发布通过 **Actions → Manual GUI release → Run workflow** 手动触发，标签使用 `Directory.Build.props` 中的版本，例如 `v3.2.1`。流程重新验证源码与全部产物，先上传到私有草稿，再核对远端文件校验值、大小和标签提交。`draft` 默认为 `true`，便于维护者检查；选择 `false` 时，校验通过后公开为正式版 **Latest**。发布正文提供中文下载说明、平台选择和本版变更。
 
 官网由核心仓库统一构建，直接导入这里的 README 和 `docs`。修改帮助内容后，在核心站点的来源清单中更新 GUI 提交 SHA，即可发布同一份文档。
 

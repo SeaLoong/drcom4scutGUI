@@ -44,6 +44,7 @@ public sealed class PreparedUpdate : IDisposable
 public sealed class UpdateService : IDisposable
 {
     public const string ProxyUrl = "https://gh-proxy.com/";
+    private static readonly string UserAgent = "drcom4scutGUI-updater/" + (typeof(UpdateService).Assembly.GetName().Version?.ToString(3) ?? "unknown");
     internal const long MaximumArchiveBytes = 1024L * 1024 * 1024;
     private readonly HttpClient client;
     private readonly bool ownsClient;
@@ -204,7 +205,7 @@ public sealed class UpdateService : IDisposable
         for (int redirect = 0; redirect < 4; redirect++)
         {
             using HttpRequestMessage request = new(HttpMethod.Get, address);
-            request.Headers.UserAgent.ParseAdd("drcom4scutGUI-updater/3.2.0");
+            request.Headers.UserAgent.ParseAdd(UserAgent);
             request.Headers.Accept.ParseAdd(canonical.Host == "api.github.com" ? "application/vnd.github+json" : "application/octet-stream");
             HttpResponseMessage response = await client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken).ConfigureAwait(false);
             // Reject clients which silently follow redirects outside the explicitly selected proxy.

@@ -61,7 +61,7 @@ getcap ./drcom4scut
 ./drcom4scut doctor
 ```
 
-`getcap` 应显示 `cap_net_raw=ep`。缺少 `setcap` 命令时，Ubuntu 可先执行 `sudo apt install libcap2-bin`。每次替换核心后重新授权；受管理的电脑由管理员协助设置。
+`getcap` 应显示 `cap_net_raw=ep`。缺少 `setcap` 命令时，Ubuntu 可先执行 `sudo apt install libcap2-bin`。手动替换核心后重新授权；受管理的电脑由管理员协助设置。
 
 **想要记住密码：** Ubuntu 安装 `libsecret-tools`，并解锁桌面密码库，例如 GNOME Keyring：
 
@@ -109,7 +109,7 @@ Linux 实际程序截图，使用示例账号，处于连接前状态。
 | 双击后没有窗口 | 在终端运行 `./drcom4scutGUI` 查看提示，按第二步准备图形组件 |
 | 提示无执行权限 | 在客户端目录运行 `chmod u+x ./drcom4scutGUI ./drcom4scut`，再重新打开；有线核心随后重新检查网络权限 |
 | 中文显示方框 | 安装中文字体，例如 Ubuntu 的 `fonts-noto-cjk` |
-| 有线提示权限不足 | 执行第三步的 `getcap` 和自检；更新核心后重新授权 |
+| 有线提示权限不足 | 执行第三步的 `getcap` 和自检；手动替换核心后重新授权 |
 | “记住密码”保存失败 | 确认桌面密码库已解锁、`secret-tool` 可用，或取消勾选后输入密码连接 |
 | 想要登录桌面后自动连接 | 勾选“登录系统时启动”“打开后自动连接”，并记住所选账号密码 |
 
@@ -124,5 +124,7 @@ cd "$HOME/Applications/drcom4scutGUI"
 ```
 
 配置与连接步骤见 [Linux 命令行指南](https://github.com/SeaLoong/drcom4scut/blob/master/docs/linux.md)。包内 `core-help/docs/` 也提供离线命令行帮助。图形界面与命令行选择一种方式连接即可。
+
+窗口中的“检查更新”和“检查核心更新”可分别更新图形界面与核心。已有有线网卡权限时，更新核心会按需请求系统授权，完成后恢复本次连接。操作和 Linux 提示示例见[更新程序](update.md#linux)。
 
 更多操作：[多账号](usage.md#多账号) · [账号与密码](security.md) · [连接排障](usage.md#排查连接问题)
