@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       core_ref:
-        description: Core commit or ref to build for the screenshots
+        description: Core master or a full commit SHA already merged into core master
         required: true
         default: master
   push:
@@ -14,6 +14,8 @@ on:
       - .github/scripts/capture_gui.py
       - .github/scripts/capture_window.swift
       - .github/scripts/capture_cli_screenshots.py
+      - .github/scripts/select_capture_core.py
+      - .github/scripts/test_capture_core.py
       - drcom4scutGUI/MainWindow.UpdateCapture.cs
 
 permissions:
@@ -48,16 +50,21 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - name: Check out the real core used by the screenshots
+      - name: Check out trusted core history
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: SeaLoong/drcom4scut
-          ref: ${{ inputs.core_ref || 'master' }}
+          ref: master
+          fetch-depth: 0
           path: artifacts/capture-core
           persist-credentials: false
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: '3.14'
+      - name: Select a reviewed core commit before executing its code
+        env:
+          CAPTURE_CORE_REF: ${{ inputs.core_ref || 'master' }}
+        run: python .github/scripts/select_capture_core.py --repository artifacts/capture-core
       - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
         with:
           dotnet-version: 10.0.x

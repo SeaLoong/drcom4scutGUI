@@ -24,7 +24,8 @@ internal static class UpdateArchive
     internal static async Task<string> ExtractAsync(string archive, string destination, UpdateRelease release, CancellationToken cancellationToken)
     {
         string stem = release.AssetName.EndsWith(".zip", StringComparison.Ordinal) ? release.AssetName[..^4] : release.AssetName[..^7];
-        Directory.CreateDirectory(destination);
+        string destinationRoot = Path.GetFullPath(destination + Path.DirectorySeparatorChar);
+        Directory.CreateDirectory(destinationRoot);
         HashSet<string> names = new(StringComparer.OrdinalIgnoreCase);
         long total = 0;
         int entries = 0;
@@ -45,7 +46,12 @@ internal static class UpdateArchive
             if (release.Component == UpdateComponent.Gui && parts.Any(part => part.Equals("drcom4scut", StringComparison.OrdinalIgnoreCase)
                 || part.Equals("drcom4scut.exe", StringComparison.OrdinalIgnoreCase)))
                 throw new InvalidDataException("GUI 更新必须使用不含核心的独立组件包。");
-            return Path.Combine(destination, Path.Combine(parts));
+            // Keep an explicit canonical containment check as a second boundary,
+            // even after validating every archive path segment above.
+            string target = Path.GetFullPath(Path.Combine(destinationRoot, Path.Combine(parts)));
+            if (!target.StartsWith(destinationRoot, StringComparison.Ordinal))
+                throw new InvalidDataException("更新归档路径离开了解压目录。");
+            return target;
         }
 
         await using FileStream input = new(archive, FileMode.Open, FileAccess.Read, FileShare.Read, 65536, FileOptions.Asynchronous);
@@ -93,7 +99,7 @@ internal static class UpdateArchive
                 if (!OperatingSystem.IsWindows()) File.SetUnixFileMode(target, entry.Mode & (UnixFileMode)0x1ff);
             }
         }
-        string root = Path.Combine(destination, stem);
+        string root = Path.Combine(destinationRoot, stem);
         if (!Directory.Exists(root)) throw new InvalidDataException("更新归档缺少组件目录。");
         return root;
     }

@@ -110,7 +110,7 @@ macOS 打包在 macOS 执行：原生启动程序位于 `.app/Contents/MacOS`，
 
 ## 更新程序截图
 
-通过 **Actions → Capture native desktop screenshots → Run workflow** 采集真实窗口，`core_ref` 指定配套核心提交。流程分别在 Windows、macOS、Linux 构建并打开程序，使用示例账号和空密码展示连接前界面；Windows、Mac 还采集系统终端中的核心帮助。
+通过 **Actions → Capture native desktop screenshots → Run workflow** 采集真实窗口。`core_ref` 只接受 `master`，或已合入核心仓库 `master` 历史的完整小写 40 位提交 SHA；不接受未合并分支、PR ref 或缩写。流程先检出可信的核心历史并验证提交归属，再执行核心的本地 action 和构建，防止在默认分支的缓存作用域中运行未审查代码。流程分别在 Windows、macOS、Linux 构建并打开程序，使用示例账号和空密码展示连接前界面；Windows、Mac 还采集系统终端中的核心帮助。
 
 下载流程的截图产物后，先核对图片中的平台、版本和窗口内容，再将需要的 PNG 与来源记录合并到 `docs/images/`。`screenshots.json` 记录运行平台、来源提交、文件校验值和截图状态；各系统安装页使用对应系统的图片。官网从这些源文件导入界面展示。
 

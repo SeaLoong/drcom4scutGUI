@@ -1,4 +1,5 @@
 using System.Buffers.Binary;
+using System.Formats.Tar;
 using System.IO.Compression;
 using System.Security.Cryptography;
 using System.Text.Json;
@@ -86,6 +87,84 @@ public sealed class UpdateArchiveTests
             "drcom4scut-0.6.0-x86_64-unknown-linux-gnu.tar.gz", new Uri("https://github.com/SeaLoong/drcom4scut/releases/download/v0.6.0/drcom4scut-0.6.0-x86_64-unknown-linux-gnu.tar.gz"),
             new FileInfo(archive).Length, "sha256:" + new string('0', 64)) { SourceCommit = Commit };
         await Assert.ThrowsAsync<InvalidDataException>(() => UpdateArchive.ExtractAsync(archive, directory.File("stage"), release, CancellationToken.None));
+    }
+
+    [Theory]
+    [InlineData("zip", "component/../escape", false)]
+    [InlineData("zip", "component/../../escape", false)]
+    [InlineData("zip", "component/../stage-sibling/escape", false)]
+    [InlineData("zip", "component/../escape/", true)]
+    [InlineData("zip", "/escape", false)]
+    [InlineData("zip", "C:/escape", false)]
+    [InlineData("zip", "component\\..\\escape", false)]
+    [InlineData("tar.gz", "component/../escape", false)]
+    [InlineData("tar.gz", "component/../../escape", false)]
+    [InlineData("tar.gz", "component/../stage-sibling/escape", false)]
+    [InlineData("tar.gz", "component/../escape/", true)]
+    [InlineData("tar.gz", "/escape", false)]
+    [InlineData("tar.gz", "C:/escape", false)]
+    [InlineData("tar.gz", "component\\..\\escape", false)]
+    public async Task MaliciousArchiveMembersCannotCreateFilesOrDirectoriesOutsideTheirComponent(
+        string format, string member, bool isDirectory)
+    {
+        using var directory = new TemporaryDirectory();
+        string archive = directory.File("component." + format);
+        CreateArchive(archive, format, member, isDirectory);
+        var release = ArchiveRelease(archive);
+        string destination = directory.File("stage");
+
+        await Assert.ThrowsAsync<InvalidDataException>(() => UpdateArchive.ExtractAsync(
+            archive, destination, release, TestContext.Current.CancellationToken));
+
+        Assert.Empty(Directory.EnumerateFileSystemEntries(destination, "*", SearchOption.AllDirectories));
+        Assert.False(File.Exists(directory.File("escape")));
+        Assert.False(Directory.Exists(directory.File("stage-sibling")));
+    }
+
+    [Theory]
+    [InlineData("zip")]
+    [InlineData("tar.gz")]
+    public async Task CanonicalExtractionRootAllowsNestedFilesWithOrWithoutTrailingSeparator(string format)
+    {
+        using var directory = new TemporaryDirectory();
+        string archive = directory.File("component." + format);
+        CreateArchive(archive, format, "component/docs/readme.txt", false);
+        var release = ArchiveRelease(archive);
+        foreach (bool trailingSeparator in new[] { false, true })
+        {
+            string destination = directory.File(trailingSeparator ? "with-separator" : "without-separator");
+            string root = await UpdateArchive.ExtractAsync(archive,
+                destination + (trailingSeparator ? Path.DirectorySeparatorChar.ToString() : ""),
+                release, TestContext.Current.CancellationToken);
+            Assert.Equal(Path.Combine(destination, "component"), root);
+            Assert.Equal(new byte[] { 1, 2, 3 }, await File.ReadAllBytesAsync(
+                Path.Combine(root, "docs", "readme.txt"), TestContext.Current.CancellationToken));
+        }
+    }
+
+    private static UpdateRelease ArchiveRelease(string archive) => new(UpdateComponent.Core, "0.6.0", "v0.6.0", "win-x64",
+        new Uri("https://github.com/SeaLoong/drcom4scut/releases/tag/v0.6.0"), Path.GetFileName(archive),
+        new Uri("https://github.com/SeaLoong/drcom4scut/releases/download/v0.6.0/" + Path.GetFileName(archive)),
+        new FileInfo(archive).Length, "sha256:" + new string('0', 64)) { SourceCommit = Commit };
+
+    private static void CreateArchive(string archive, string format, string member, bool isDirectory)
+    {
+        if (format == "zip")
+        {
+            using var zip = ZipFile.Open(archive, ZipArchiveMode.Create);
+            if (isDirectory) zip.CreateEntry(member);
+            else Add(zip, member, [1, 2, 3]);
+        }
+        else
+        {
+            using FileStream file = File.Create(archive);
+            using GZipStream gzip = new(file, CompressionLevel.Fastest);
+            using TarWriter writer = new(gzip);
+            PaxTarEntry entry = new(isDirectory ? TarEntryType.Directory : TarEntryType.RegularFile, member);
+            using MemoryStream contents = new([1, 2, 3]);
+            if (!isDirectory) entry.DataStream = contents;
+            writer.WriteEntry(entry);
+        }
     }
 
     private static void Add(ZipArchive archive, string path, byte[] bytes)
