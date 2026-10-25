@@ -6,7 +6,7 @@
 
 ## 1. 下载适合芯片的桌面包
 
-前往[客户端下载页](https://github.com/SeaLoong/drcom4scut/releases)，选择最新版本（含预览版），展开 **Assets（文件列表）**。下载文件名含 **`desktop`**，并符合下表的压缩包：
+前往[客户端下载页](https://github.com/SeaLoong/drcom4scut/releases/latest)，下载最新正式版，展开 **Assets（文件列表）**。下载文件名含 **`desktop`**，并符合下表的压缩包：
 
 | “关于本机”显示 | 桌面包文件名结尾 |
 | --- | --- |

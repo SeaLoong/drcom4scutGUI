@@ -20,7 +20,7 @@
 
 ### 下载哪一个桌面包
 
-图形界面和命令行共用同一个桌面包。在[下载页](https://github.com/SeaLoong/drcom4scut/releases)选择最新版本（含预览版），展开 **Assets（文件列表）**，找到文件名含 **`desktop`** 的压缩包。
+图形界面和命令行共用同一个桌面包。在[下载页](https://github.com/SeaLoong/drcom4scut/releases/latest)下载最新正式版，展开 **Assets（文件列表）**，找到文件名含 **`desktop`** 的压缩包。
 
 Windows 在“设置 → 系统 → 关于”查看系统类型；Mac 在“苹果菜单 → 关于本机”查看芯片。Linux 终端运行 `uname -m`：`x86_64` 选 x64，`aarch64` 选 ARM64。
 

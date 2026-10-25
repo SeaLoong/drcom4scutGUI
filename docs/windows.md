@@ -6,7 +6,7 @@
 
 ## 1. 下载桌面包
 
-先打开 **设置 → 系统 → 关于**，查看“系统类型”。前往[客户端下载页](https://github.com/SeaLoong/drcom4scut/releases)，选择最新版本（含预览版），展开 **Assets（文件列表）**。找到文件名含 **`desktop`**，并符合下表的 ZIP：
+先打开 **设置 → 系统 → 关于**，查看“系统类型”。前往[客户端下载页](https://github.com/SeaLoong/drcom4scut/releases/latest)，下载最新正式版，展开 **Assets（文件列表）**。找到文件名含 **`desktop`**，并符合下表的 ZIP：
 
 | 系统类型 | 桌面包文件名结尾 |
 | --- | --- |

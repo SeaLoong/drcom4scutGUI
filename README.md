@@ -1,7 +1,7 @@
 # drcom4scutGUI
 
 [![构建与测试](https://github.com/SeaLoong/drcom4scutGUI/actions/workflows/ci.yml/badge.svg?branch=master)](https://github.com/SeaLoong/drcom4scutGUI/actions/workflows/ci.yml)
-[![下载桌面包](docs/badges/preview.svg)](https://github.com/SeaLoong/drcom4scut/releases)
+[![下载桌面包](docs/badges/preview.svg)](https://github.com/SeaLoong/drcom4scut/releases/latest)
 [![支持的桌面系统](docs/badges/platforms.svg)](#安装)
 [![许可证](docs/badges/license.svg)](LICENSE)
 
@@ -9,7 +9,7 @@
 
 适用于 Windows、macOS 和 Linux。提供有线登录、断线重连、多账号、记住密码和开机自动连接，也可以代为提交受支持的校园网页登录。连接进度和排障信息都能在窗口里查看。
 
-[软件首页与帮助中心](https://sealoong.github.io/drcom4scut/) · [下载客户端](https://github.com/SeaLoong/drcom4scut/releases) · [完整使用指南](docs/usage.md) · [账号与密码](docs/security.md)
+[软件首页与帮助中心](https://sealoong.github.io/drcom4scut/) · [下载客户端](https://github.com/SeaLoong/drcom4scut/releases/latest) · [完整使用指南](docs/usage.md) · [账号与密码](docs/security.md)
 
 ## 安装
 

@@ -2,7 +2,7 @@
 
 [返回首页](../README.md)
 
-本页记录版本变化和设计来源。安装请看[使用指南](usage.md)，桌面一体包见[下载页](https://github.com/SeaLoong/drcom4scut/releases)。
+本页记录版本变化和设计来源。安装请看[使用指南](usage.md)，桌面一体包见[下载页](https://github.com/SeaLoong/drcom4scut/releases/latest)。
 
 ## 版本记录
 
