@@ -32,6 +32,8 @@ Linux GUI 当前动态链接系统 glibc。发布包中的 .NET 运行时会增�
 
 当前锁定的 `SkiaSharp.NativeAssets.Linux 3.119.4` 和 `HarfBuzzSharp.NativeAssets.Linux 8.3.1.3` 已包含 `linux-arm`、`linux-musl-x64`、`linux-musl-arm64`、`linux-musl-arm` 原生文件。因此不能仅以“没有原生库”否定 ARM32 或 musl，但文件存在也不等于整套程序已验证。扩展时还需要调整 RID、核心映射、32 位二进制检查、更新器和 CI。
 
+这里的未发布状态仅指桌面 GUI。路由器构建独立提供 Rust 核心、procd 脚本和可选 LuCI 资源，不为 MIPS 或其他路由器架构引入 .NET；GUI 一体包仍为六个平台。
+
 OpenWrt 的设备与安装要求见[核心路由器指南](https://github.com/SeaLoong/drcom4scut/blob/master/docs/openwrt.md)。
 
 ## 发布体积的来源
