@@ -259,6 +259,59 @@ public sealed class UpdateControllerTests
         }, TestContext.Current.CancellationToken);
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task TrayStopCannotUnlockConnectionControlsDuringUpdateInstallation(bool failInstallation)
+    {
+        await using HeadlessUnitTestSession session = HeadlessUnitTestSession.StartNew(typeof(TestAppBuilder));
+        await session.Dispatch(async () =>
+        {
+            FakeClient client = new()
+            {
+                InstallGate = new TaskCompletionSource(),
+                InstallError = failInstallation ? new IOException("安装目录不可写") : null
+            };
+            client.Available[UpdateComponent.Core] = "0.7.0";
+            List<string> dialogs = [];
+            MainWindow window = new(true, new Configuration(), client, new ManualClock(), (message, title, confirm) =>
+            {
+                dialogs.Add(title + ":" + message);
+                return Task.FromResult(confirm);
+            });
+            window.Show();
+            try
+            {
+                Find<Button>(window, "checkCoreUpdateButton").RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+                await Eventually(() => client.Events.Contains("install:Core"));
+                Assert.False(Find<Button>(window, "loginButton").IsEnabled);
+                Assert.False(Find<AutoCompleteBox>(window, "nameComboBox").IsEnabled);
+
+                // The tray's stop command remains available while the window's
+                // connection controls are locked for replacement.
+                await window.StopCoreAsync();
+                Assert.False(Find<Button>(window, "loginButton").IsEnabled);
+                Assert.False(Find<AutoCompleteBox>(window, "nameComboBox").IsEnabled);
+                Assert.DoesNotContain("核心已更新", Find<TextBlock>(window, "statusLabel").Text);
+
+                client.InstallGate.SetResult();
+                await Eventually(() => client.Events.Contains("dispose:Core")
+                    && Find<Button>(window, "checkCoreUpdateButton").IsEnabled);
+                Assert.True(Find<Button>(window, "loginButton").IsEnabled);
+                Assert.True(Find<AutoCompleteBox>(window, "nameComboBox").IsEnabled);
+                Assert.Equal("连接", Find<Button>(window, "loginButton").Content);
+                Assert.Equal(failInstallation, Find<Button>(window, "coreUpdateNotice").IsVisible);
+                Assert.Equal(failInstallation, dialogs.Any(dialog => dialog.StartsWith("更新失败:")));
+            }
+            finally
+            {
+                client.InstallGate.TrySetResult();
+                window.Close();
+            }
+            return true;
+        }, TestContext.Current.CancellationToken);
+    }
+
     [Fact]
     public async Task ActualControlsKeepEmptyUpdatesHiddenAndShowBothVersionNoticesWithoutDialogs()
     {
@@ -399,6 +452,7 @@ public sealed class UpdateControllerTests
         internal bool CheckWasCancelled;
         internal int Downloads;
         internal TaskCompletionSource? DownloadGate;
+        internal TaskCompletionSource? InstallGate;
 
         public async Task<UpdateOffer?> CheckAsync(UpdateComponent component, CancellationToken cancellationToken)
         {
@@ -424,11 +478,11 @@ public sealed class UpdateControllerTests
 
         private sealed class Download(FakeClient owner, UpdateComponent component) : IUpdateDownload
         {
-            public Task InstallAsync(CancellationToken cancellationToken)
+            public async Task InstallAsync(CancellationToken cancellationToken)
             {
                 owner.Events.Add("install:" + component);
+                if (owner.InstallGate is not null) await owner.InstallGate.Task.WaitAsync(cancellationToken);
                 if (owner.InstallError is not null) throw owner.InstallError;
-                return Task.CompletedTask;
             }
             public void Dispose() => owner.Events.Add("dispose:" + component);
         }

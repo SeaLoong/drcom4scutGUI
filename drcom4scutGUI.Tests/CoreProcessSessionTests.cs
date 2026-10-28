@@ -318,6 +318,49 @@ public sealed class CoreProcessSessionTests
     }
 
     [Fact]
+    public async Task CancelingBlockedSecretInputStopsTheChildAndRemovesPrivateFiles()
+    {
+        using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        var arguments = new TaskCompletionSource<string[]>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var startup = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        string secret = "synthetic-private-input-" + new string('x', 256 * 1024);
+        Task<int> run = new CoreProcessSession(Helper).RunAsync(new("exit-before-stdin", secret), line =>
+        {
+            if (line.StartsWith("[\"", StringComparison.Ordinal)) arguments.TrySetResult(JsonSerializer.Deserialize<string[]>(line)!);
+        }, _ => { }, cancellation.Token, status =>
+        {
+            if (status.Phase == CoreConnectionPhase.WaitingInterface) startup.TrySetResult();
+        });
+        string? path = null;
+        try
+        {
+            string[] args = await arguments.Task.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+            path = args[Array.IndexOf(args, "--status-file") + 1];
+            await startup.Task.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+            int pid;
+            using (JsonDocument document = JsonDocument.Parse(await File.ReadAllTextAsync(path, TestContext.Current.CancellationToken)))
+                pid = document.RootElement.GetProperty("pid").GetInt32();
+            cancellation.Cancel();
+            OperationCanceledException failure = await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+                run.WaitAsync(TimeSpan.FromSeconds(6), TestContext.Current.CancellationToken));
+            Assert.DoesNotContain(secret, failure.ToString());
+            AssertOwnedChildStopped(pid);
+            Assert.False(Directory.Exists(Path.GetDirectoryName(path)!));
+        }
+        finally
+        {
+            cancellation.Cancel();
+            // Release the fixture after any failed assertion so a regression
+            // cannot leave the owned process behind and affect later tests.
+            if (path is not null && Directory.Exists(Path.GetDirectoryName(path)!))
+                try { await File.WriteAllTextAsync(path + ".startup-observed", "observed", CancellationToken.None); }
+                catch (DirectoryNotFoundException) { }
+            try { await run.WaitAsync(TimeSpan.FromSeconds(15), CancellationToken.None); }
+            catch (OperationCanceledException) when (cancellation.IsCancellationRequested) { }
+        }
+    }
+
+    [Fact]
     public async Task SimultaneousLargeStdoutAndStderrCannotDeadlock()
     {
         var output = new ConcurrentQueue<string>();
@@ -328,6 +371,133 @@ public sealed class CoreProcessSessionTests
         Assert.Equal(17, code);
         Assert.Contains("stdout-line-4999", output);
         Assert.Contains("stderr-line-4999", error);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task DiagnosticConsumerFailureStopsTheOwnedChildAndRemainsVisible(bool stderrFails)
+    {
+        using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        var ready = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var arguments = new TaskCompletionSource<string[]>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var fault = new InvalidOperationException("Synthetic diagnostic consumer failure.");
+        Task<int> run = new CoreProcessSession(Helper).RunAsync(new("wait-for-cancellation", "synthetic-secret-input"), line =>
+        {
+            if (line.StartsWith("[\"", StringComparison.Ordinal)) arguments.TrySetResult(JsonSerializer.Deserialize<string[]>(line)!);
+            if (line.StartsWith("ready:", StringComparison.Ordinal))
+            {
+                ready.TrySetResult(int.Parse(line[6..]));
+                if (!stderrFails) throw fault;
+            }
+        }, _ => { if (stderrFails) throw fault; }, cancellation.Token);
+        try
+        {
+            int pid = await ready.Task.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+            string[] args = await arguments.Task.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+            string directory = Path.GetDirectoryName(args[Array.IndexOf(args, "--status-file") + 1])!;
+            InvalidOperationException failure = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+                run.WaitAsync(TimeSpan.FromSeconds(6), TestContext.Current.CancellationToken));
+            Assert.Same(fault, failure);
+            AssertOwnedChildStopped(pid);
+            Assert.False(Directory.Exists(directory));
+        }
+        finally
+        {
+            cancellation.Cancel();
+            try { await run.WaitAsync(TimeSpan.FromSeconds(10), CancellationToken.None); }
+            catch (Exception error) when (ReferenceEquals(error, fault) || error is OperationCanceledException) { }
+        }
+    }
+
+    [Fact]
+    public async Task ConsumerFailureDuringBlockedSecretInputStillStopsTheOwnedChild()
+    {
+        using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        var arguments = new TaskCompletionSource<string[]>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var startup = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var fault = new InvalidOperationException("Synthetic startup status consumer failure.");
+        string secret = "synthetic-private-input-" + new string('x', 256 * 1024);
+        Task<int> run = new CoreProcessSession(Helper).RunAsync(new("exit-before-stdin", secret), line =>
+        {
+            if (line.StartsWith("[\"", StringComparison.Ordinal)) arguments.TrySetResult(JsonSerializer.Deserialize<string[]>(line)!);
+        }, _ => { }, cancellation.Token, status =>
+        {
+            if (status.Phase == CoreConnectionPhase.WaitingInterface)
+            {
+                startup.TrySetResult();
+                throw fault;
+            }
+        });
+        string? path = null;
+        try
+        {
+            string[] args = await arguments.Task.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+            path = args[Array.IndexOf(args, "--status-file") + 1];
+            await startup.Task.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+            InvalidOperationException failure = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+                run.WaitAsync(TimeSpan.FromSeconds(6), TestContext.Current.CancellationToken));
+            Assert.Same(fault, failure);
+            Assert.DoesNotContain(secret, failure.ToString());
+            Assert.False(Directory.Exists(Path.GetDirectoryName(path)!));
+        }
+        finally
+        {
+            cancellation.Cancel();
+            if (path is not null && Directory.Exists(Path.GetDirectoryName(path)!))
+                try { await File.WriteAllTextAsync(path + ".startup-observed", "observed", CancellationToken.None); }
+                catch (DirectoryNotFoundException) { }
+            try { await run.WaitAsync(TimeSpan.FromSeconds(15), CancellationToken.None); }
+            catch (Exception error) when (ReferenceEquals(error, fault) || error is OperationCanceledException) { }
+        }
+    }
+
+    [Fact]
+    public async Task StatusConsumerFailureStopsTheOwnedChildAndRemainsVisible()
+    {
+        using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        var arguments = new TaskCompletionSource<string[]>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var online = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var fault = new InvalidOperationException("Synthetic status consumer failure.");
+        Task<int> run = new CoreProcessSession(Helper).RunAsync(new("status-transition", "synthetic-secret-input"), line =>
+        {
+            if (line.StartsWith("[\"", StringComparison.Ordinal)) arguments.TrySetResult(JsonSerializer.Deserialize<string[]>(line)!);
+        }, _ => { }, cancellation.Token, status =>
+        {
+            if (status.Phase == CoreConnectionPhase.Online) online.TrySetResult();
+            else if (status.Phase == CoreConnectionPhase.Offline) throw fault;
+        });
+        try
+        {
+            string[] args = await arguments.Task.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+            await online.Task.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+            string path = args[Array.IndexOf(args, "--status-file") + 1];
+            int pid;
+            using (JsonDocument document = JsonDocument.Parse(await File.ReadAllTextAsync(path, TestContext.Current.CancellationToken)))
+                pid = document.RootElement.GetProperty("pid").GetInt32();
+            await File.WriteAllTextAsync(path + ".online-observed", "observed", TestContext.Current.CancellationToken);
+            InvalidOperationException failure = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+                run.WaitAsync(TimeSpan.FromSeconds(6), TestContext.Current.CancellationToken));
+            Assert.Same(fault, failure);
+            AssertOwnedChildStopped(pid);
+            Assert.False(Directory.Exists(Path.GetDirectoryName(path)!));
+        }
+        finally
+        {
+            cancellation.Cancel();
+            try { await run.WaitAsync(TimeSpan.FromSeconds(10), CancellationToken.None); }
+            catch (Exception error) when (ReferenceEquals(error, fault) || error is OperationCanceledException) { }
+        }
+    }
+
+    private static void AssertOwnedChildStopped(int pid)
+    {
+        try
+        {
+            using var child = Process.GetProcessById(pid);
+            Assert.True(child.HasExited, $"Session returned while its child PID {pid} was still running.");
+        }
+        catch (ArgumentException) { } // The OS already reaped the exact owned child.
     }
 
     [Fact]

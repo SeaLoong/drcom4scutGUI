@@ -19,6 +19,7 @@ namespace drcom4scutGUI;
 /// <summary>Installs only a verified component; account files and the other component are never part of a transaction.</summary>
 internal static class UpdateInstaller
 {
+    internal const string InstallLockName = ".drcom-update.lock";
     internal const UnixFileMode PrivateDirectoryMode = UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute;
     internal static string UpdatesRoot => Path.Combine(PlatformPaths.ConfigurationDirectory, "updates");
     private static readonly HashSet<string> PrivateNames = new(StringComparer.OrdinalIgnoreCase)
@@ -198,6 +199,8 @@ internal static class UpdateInstaller
     internal static async Task ApplyFilesAsync(string source, string destination, IReadOnlyList<UpdateFile> entries,
         Func<Task>? verify, Func<Task>? activate, CancellationToken cancellationToken, UnixIdentity? owner = null, Func<Task>? beforeApply = null)
     {
+        if (entries.Any(entry => entry.Path.Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar).Any(IsInstallationControlName)))
+            throw new InvalidDataException("更新载荷不能替换内部安装控制路径。");
         RejectLinks(destination);
         using FileStream gate = OpenInstallLock(destination);
         if (beforeApply is not null) await beforeApply().ConfigureAwait(false);
@@ -289,7 +292,7 @@ internal static class UpdateInstaller
 
     internal static FileStream OpenInstallLock(string directory)
     {
-        string path = Path.Combine(directory, ".drcom-update.lock");
+        string path = Path.Combine(directory, InstallLockName);
         RejectLinks(path);
         FileStreamOptions options = new() { Mode = FileMode.OpenOrCreate, Access = FileAccess.ReadWrite, Share = FileShare.None };
         if (!OperatingSystem.IsWindows()) options.UnixCreateMode = UnixFileMode.UserRead | UnixFileMode.UserWrite;
@@ -348,7 +351,15 @@ internal static class UpdateInstaller
         _ = SafeChild(Path.GetTempPath(), relative);
         if (relative.Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar).Any(PrivateNames.Contains))
             throw new InvalidDataException("GUI 更新不能包含核心或账号配置。");
+        if (relative.Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar).Any(IsInstallationControlName))
+            throw new InvalidDataException("GUI 更新不能包含内部安装控制路径。");
     }
+
+    internal static bool IsInstallationControlName(string name) => name.Equals(InstallLockName, StringComparison.OrdinalIgnoreCase)
+        || name.StartsWith(".drcom-update-", StringComparison.OrdinalIgnoreCase)
+        || name.StartsWith(".drcom4scut-update-", StringComparison.OrdinalIgnoreCase)
+        || name.StartsWith(".drcom-gui-new-", StringComparison.OrdinalIgnoreCase)
+        || name.StartsWith(".drcom-gui-old-", StringComparison.OrdinalIgnoreCase);
 
     internal static void RejectLinks(string path)
     {

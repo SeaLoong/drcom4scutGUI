@@ -28,7 +28,7 @@ public sealed partial class MainWindow : Window
     private readonly UpdateController updates;
     private readonly Func<string, string, bool, Task<bool>>? updateDialog;
     private bool reconnectAfterCoreUpdate;
-    private bool updateStoppedCore;
+    private bool installingUpdate;
     private Configuration config;
     private Account? current;
     private TrayIcon? tray;
@@ -207,6 +207,7 @@ public sealed partial class MainWindow : Window
                 await MessageAsync(error.Message + "\n原文件已保留。重新保存前请确认账号设置。\n" + store.FilePath, "账号配置未能读取");
             }
             InitUI();
+            if (store.LoadWarning is { } warning) await MessageAsync(warning, "旧账号文件需要清理");
             InitTray();
             coreVersion = await core.VerifyCoreAsync(lifetime.Token);
             RefreshUpdateUI();
@@ -378,7 +379,7 @@ public sealed partial class MainWindow : Window
 
     private async Task StartCoreAsync()
     {
-        if (skipBackend || sessionTask is not null || closing) return;
+        if (skipBackend || sessionTask is not null || closing || installingUpdate) return;
         string username = (nameComboBox.Text ?? "").Trim();
         string password = passwordTextBox.Text ?? "";
         string ip = (ipTextBox.Text ?? "").Trim();
@@ -412,7 +413,7 @@ public sealed partial class MainWindow : Window
             authentication.Dispose();
             authentication = null;
             authenticated = false;
-            if (!closing) SetUIEnabled(true);
+            if (!closing && !installingUpdate) SetUIEnabled(true);
         }
     }
 
@@ -466,10 +467,10 @@ public sealed partial class MainWindow : Window
         }
     }
 
-    private async Task StopCoreAsync()
+    internal async Task StopCoreAsync()
     {
         Task<int>? running = sessionTask;
-        if (!closing) { label.Text = "正在注销并停止…"; loginButton.IsEnabled = false; }
+        if (!closing && !installingUpdate) { label.Text = "正在注销并停止…"; loginButton.IsEnabled = false; }
         authentication?.Cancel();
         if (running is not null)
         {
@@ -477,7 +478,11 @@ public sealed partial class MainWindow : Window
             catch (OperationCanceledException) { }
             catch (Exception error) { diagnostics.Add(error.Message); }
         }
-        if (!closing) { label.Text = "已停止。"; loginButton.IsEnabled = true; ShowAndActivate(); }
+        if (!closing)
+        {
+            if (!installingUpdate) { label.Text = "已停止。"; loginButton.IsEnabled = true; }
+            ShowAndActivate();
+        }
     }
 
     private Task<bool> ConfirmUpdateAsync(UpdateComponent component, string prompt)
@@ -501,8 +506,9 @@ public sealed partial class MainWindow : Window
     private async Task BeforeUpdateInstallAsync(UpdateComponent component)
     {
         reconnectAfterCoreUpdate = component == UpdateComponent.Core && sessionTask is not null;
+        installingUpdate = true;
+        loginButton.IsEnabled = false;
         await StopCoreAsync();
-        updateStoppedCore = true;
         SetUIEnabled(false);
         loginButton.IsEnabled = false;
     }
@@ -522,7 +528,7 @@ public sealed partial class MainWindow : Window
         }
         finally
         {
-            updateStoppedCore = false;
+            installingUpdate = false;
             SetUIEnabled(true);
             loginButton.IsEnabled = true;
         }
@@ -556,10 +562,10 @@ public sealed partial class MainWindow : Window
         doctorButton.IsEnabled = !updates.IsBusy;
         guiUpdateNotice.IsEnabled = !updates.IsBusy;
         coreUpdateNotice.IsEnabled = !updates.IsBusy;
-        if (!updates.IsBusy && updateStoppedCore)
+        if (!updates.IsBusy && installingUpdate)
         {
             // Failed installation keeps the existing password only in this process.
-            updateStoppedCore = false;
+            installingUpdate = false;
             reconnectAfterCoreUpdate = false;
             SetUIEnabled(true);
             loginButton.IsEnabled = true;

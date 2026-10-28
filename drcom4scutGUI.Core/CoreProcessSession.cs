@@ -73,25 +73,29 @@ public sealed class CoreProcessSession(string executable)
         Task output = CoreOutputReader.ReadLinesAsync(process.StandardOutput, stdout, redactor);
         Task error = CoreOutputReader.ReadLinesAsync(process.StandardError, stderr, redactor);
         Task status = MonitorStatusAsync(statusDirectory.StatusPath, process.Id, options, connectionChanged, statusLifetime.Token);
+        using CancellationTokenSource inputLifetime = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        Task input = WritePasswordAsync(process, options.Password, inputLifetime.Token);
         try
         {
-            try
+            Task exit = process.WaitForExitAsync(cancellationToken);
+            List<Task> pending = [exit, input, output, error, status];
+            while (pending.Count > 0)
             {
-                process.StandardInput.NewLine = "\n";
-                await process.StandardInput.WriteLineAsync(options.Password.AsMemory(), cancellationToken).ConfigureAwait(false);
-                process.StandardInput.Close();
+                // A failed diagnostic/status consumer must stop its owned core,
+                // including while that core has not yet read the private input.
+                Task completed = await Task.WhenAny(pending).ConfigureAwait(false);
+                await completed.ConfigureAwait(false);
+                if (completed == exit) break;
+                pending.Remove(completed);
             }
-            catch (Exception failure) when (failure is IOException or InvalidOperationException)
-            {
-                throw new InvalidOperationException("核心在接收密码前已关闭输入，请检查核心版本、启动日志和运行权限。");
-            }
-            await process.WaitForExitAsync(cancellationToken).ConfigureAwait(false);
+            await input.ConfigureAwait(false);
             await Task.WhenAll(output, error).ConfigureAwait(false);
             cancellationToken.ThrowIfCancellationRequested();
             return process.ExitCode;
         }
         finally
         {
+            inputLifetime.Cancel();
             // StreamWriter.Close may flush a buffered tail to an already dead
             // child. That cleanup failure must never skip stopping the child,
             // cancelling/awaiting its status reader, or removing private files.
@@ -103,16 +107,42 @@ public sealed class CoreProcessSession(string executable)
             finally
             {
                 statusLifetime.Cancel();
-                try { await status.ConfigureAwait(false); }
-                catch (OperationCanceledException) when (statusLifetime.IsCancellationRequested) { }
-                await Task.WhenAll(output, error).ConfigureAwait(false);
+                // Observe every reader even if another reader/callback failed.
+                // WhenAll waits for all tasks and still propagates real faults.
+                try { await Task.WhenAll(input, status, output, error).ConfigureAwait(false); }
+                catch (OperationCanceledException) when (inputLifetime.IsCancellationRequested && statusLifetime.IsCancellationRequested) { }
             }
+        }
+    }
+
+    private static async Task WritePasswordAsync(Process process, string password, CancellationToken cancellationToken)
+    {
+        try
+        {
+            process.StandardInput.NewLine = "\n";
+            await process.StandardInput.WriteLineAsync(password.AsMemory(), cancellationToken).ConfigureAwait(false);
+            // Flush the final buffered characters with cancellation before the
+            // synchronous Close sends EOF; it must not block on a full pipe.
+            await process.StandardInput.FlushAsync(cancellationToken).ConfigureAwait(false);
+            process.StandardInput.Close();
+        }
+        catch (Exception failure) when (failure is IOException or InvalidOperationException)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            throw new InvalidOperationException("核心在接收密码前已关闭输入，请检查核心版本、启动日志和运行权限。");
         }
     }
 
     private static void CloseStandardInput(Process process)
     {
-        try { process.StandardInput.Close(); }
+        try
+        {
+            // This is cancellation/error cleanup (successful input already sent
+            // EOF). Close the pipe first so a buffered writer tail cannot block
+            // before the owned child is asked to stop.
+            process.StandardInput.BaseStream.Close();
+            process.StandardInput.Close();
+        }
         catch (Exception failure) when (failure is IOException or InvalidOperationException) { }
     }
 

@@ -37,17 +37,38 @@ public sealed class Configuration
 /// Stores protected passwords only when requested. Legacy files are replaced only
 /// after every account has been protected and the new document is complete.
 /// </summary>
-public sealed class ConfigurationStore(string path, ISecretProtector protector, string? legacyPath = null)
+public sealed class ConfigurationStore
 {
-    public string FilePath { get; } = Path.GetFullPath(path);
+    private readonly ISecretProtector protector;
+    private readonly string? legacyPath;
+    private readonly Action<string> deleteLegacy;
+    private readonly Dictionary<Account, ProtectedPassword> protectedPasswords = new(ReferenceEqualityComparer.Instance);
+    private sealed record ProtectedPassword(string Password, string Ciphertext);
+
+    public string FilePath { get; }
+    public string? LoadWarning { get; private set; }
+
+    public ConfigurationStore(string path, ISecretProtector protector, string? legacyPath = null)
+        : this(path, protector, legacyPath, File.Delete) { }
+
+    internal ConfigurationStore(string path, ISecretProtector protector, string? legacyPath, Action<string> deleteLegacy)
+    {
+        FilePath = Path.GetFullPath(path);
+        this.protector = protector;
+        this.legacyPath = legacyPath;
+        this.deleteLegacy = deleteLegacy;
+    }
 
     public Configuration Load()
     {
+        LoadWarning = null;
         string? source = File.Exists(FilePath) ? FilePath :
             legacyPath is not null && File.Exists(legacyPath) ? Path.GetFullPath(legacyPath) : null;
-        if (source is null) return new Configuration();
+        if (source is null) { protectedPasswords.Clear(); return new Configuration(); }
+        Dictionary<Account, ProtectedPassword> loadedPasswords = new(ReferenceEqualityComparer.Instance);
         Configuration configuration;
         bool requiresMigration;
+        bool plaintextSource;
         try
         {
             using JsonDocument document = JsonDocument.Parse(File.ReadAllBytes(source));
@@ -55,6 +76,7 @@ public sealed class ConfigurationStore(string path, ISecretProtector protector, 
             if (root.ValueKind != JsonValueKind.Object) throw new InvalidDataException("配置必须是 JSON 对象。");
             int schema = root.TryGetProperty("schemaVersion", out JsonElement version) ? version.GetInt32() : 1;
             if (schema is not (1 or 2)) throw new InvalidDataException("配置版本不受支持，请更新客户端。");
+            plaintextSource = schema == 1;
             requiresMigration = schema != 2 || source != FilePath;
             configuration = new Configuration
             {
@@ -82,7 +104,10 @@ public sealed class ConfigurationStore(string path, ISecretProtector protector, 
                     string password = schema == 2
                         ? remember && encrypted.Length > 0 ? protector.Unprotect(encrypted) : ""
                         : ReadString(value, "password");
-                    configuration.Accounts.Add(new Account { Name = name, Password = password, RememberPassword = remember, IP = ReadString(value, "ip") });
+                    Account account = new() { Name = name, Password = password, RememberPassword = remember, IP = ReadString(value, "ip") };
+                    configuration.Accounts.Add(account);
+                    if (schema == 2 && remember && encrypted.Length > 0)
+                        loadedPasswords[account] = new ProtectedPassword(password, encrypted);
                 }
             }
             else if (schema == 1)
@@ -102,13 +127,20 @@ public sealed class ConfigurationStore(string path, ISecretProtector protector, 
             throw new InvalidDataException("配置文件格式不正确，原文件未更改。");
         }
         PortalOptions.ValidateStored(configuration);
+        protectedPasswords.Clear();
+        foreach (var entry in loadedPasswords) protectedPasswords.Add(entry.Key, entry.Value);
         if (requiresMigration)
         {
             Save(configuration);
             if (source != FilePath)
             {
                 // Do not retain a plaintext .bak alongside the encrypted migration.
-                File.Delete(source);
+                try { deleteLegacy(source); }
+                catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+                {
+                    LoadWarning = "账号已迁移到加密配置，但旧" + (plaintextSource ? "明文" : "账号")
+                        + "文件未能删除。请手动删除旧文件：\n" + source;
+                }
             }
         }
         return configuration;
@@ -118,6 +150,24 @@ public sealed class ConfigurationStore(string path, ISecretProtector protector, 
     {
         ArgumentNullException.ThrowIfNull(configuration);
         PortalOptions.ValidateStored(configuration);
+        bool refreshRememberedPasswords = configuration.Accounts.Any(account => account.RememberPassword && account.Password.Length > 0
+            && (!protectedPasswords.TryGetValue(account, out ProtectedPassword? saved)
+                || !string.Equals(saved.Password, account.Password, StringComparison.Ordinal)));
+        Dictionary<Account, ProtectedPassword> pendingPasswords = new(ReferenceEqualityComparer.Instance);
+        string Protect(Account account)
+        {
+            string password = account.Password;
+            if (!account.RememberPassword || password.Length == 0) return "";
+            // A loaded, unchanged secret already has authenticated ciphertext.
+            // Preference changes must not require unlocking every other account.
+            // A fresh secret can create a replacement OS-vault key. Refresh the
+            // entire remembered set together so one file never mixes key epochs.
+            string ciphertext = !refreshRememberedPasswords && protectedPasswords.TryGetValue(account, out ProtectedPassword? saved)
+                && string.Equals(saved.Password, password, StringComparison.Ordinal)
+                    ? saved.Ciphertext : protector.Protect(password);
+            pendingPasswords[account] = new ProtectedPassword(password, ciphertext);
+            return ciphertext;
+        }
         var encrypted = new StoredConfiguration
         {
             Mac = configuration.Mac,
@@ -133,7 +183,7 @@ public sealed class ConfigurationStore(string path, ISecretProtector protector, 
             Accounts = configuration.Accounts.Select(account => new StoredAccount
             {
                 Name = account.Name,
-                EncryptedPassword = account.RememberPassword && account.Password.Length > 0 ? protector.Protect(account.Password) : "",
+                EncryptedPassword = Protect(account),
                 RememberPassword = account.RememberPassword,
                 IP = account.IP
             }).ToList()
@@ -152,6 +202,8 @@ public sealed class ConfigurationStore(string path, ISecretProtector protector, 
                 file.Flush(flushToDisk: true);
             }
             File.Move(temporary, FilePath, overwrite: true);
+            protectedPasswords.Clear();
+            foreach (var entry in pendingPasswords) protectedPasswords.Add(entry.Key, entry.Value);
         }
         finally
         {

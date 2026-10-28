@@ -43,6 +43,8 @@ internal static class UpdateArchive
                 || part.EndsWith(' ') || part.EndsWith('.') || IsWindowsDevice(part)) || !names.Add(normalized))
                 throw new InvalidDataException("更新归档包含重复、越界或不安全路径。");
             if (parts.Any(PrivateNames.Contains)) throw new InvalidDataException("更新归档不能包含用户账号或核心配置。");
+            if (parts.Any(UpdateInstaller.IsInstallationControlName))
+                throw new InvalidDataException("更新归档不能包含内部安装控制路径。");
             if (release.Component == UpdateComponent.Gui && parts.Any(part => part.Equals("drcom4scut", StringComparison.OrdinalIgnoreCase)
                 || part.Equals("drcom4scut.exe", StringComparison.OrdinalIgnoreCase)))
                 throw new InvalidDataException("GUI 更新必须使用不含核心的独立组件包。");

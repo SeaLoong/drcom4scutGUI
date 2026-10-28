@@ -92,6 +92,29 @@ public sealed class UpdateInstallerTests
     }
 
     [Fact]
+    public async Task DownloadedPayloadCannotReplaceThePersistentCrossClientInstallationLock()
+    {
+        using var directory = new TemporaryDirectory();
+        string source = directory.File("new"), target = directory.File("installed");
+        Directory.CreateDirectory(source); Directory.CreateDirectory(target);
+        const string name = ".drcom-update.lock";
+        byte[] replacement = "untrusted downloaded lock replacement"u8.ToArray();
+        File.WriteAllBytes(Path.Combine(source, name), replacement);
+        File.WriteAllText(Path.Combine(target, name), "persistent lock identity");
+
+        await Assert.ThrowsAsync<InvalidDataException>(() => UpdateInstaller.DescribeTreeAsync(source, TestContext.Current.CancellationToken));
+        // Also defend a supplied transaction manifest, rather than relying only
+        // on the earlier archive/tree validation to protect the held lock inode.
+        UpdateFile entry = new(name, replacement.Length, Convert.ToHexString(SHA256.HashData(replacement)).ToLowerInvariant(), 0x180);
+        await Assert.ThrowsAsync<InvalidDataException>(() => UpdateInstaller.ApplyFilesAsync(
+            source, target, [entry], null, null, TestContext.Current.CancellationToken));
+
+        Assert.Equal("persistent lock identity", File.ReadAllText(Path.Combine(target, name)));
+        Assert.Empty(Directory.EnumerateDirectories(target));
+        using FileStream gate = UpdateInstaller.OpenInstallLock(target);
+    }
+
+    [Fact]
     public async Task CancellationBeforeActivationRestoresOriginalFiles()
     {
         using var directory = new TemporaryDirectory();

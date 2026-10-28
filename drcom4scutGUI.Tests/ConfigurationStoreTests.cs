@@ -139,6 +139,170 @@ public sealed class ConfigurationStoreTests
     }
 
     [Fact]
+    public void ForgettingCurrentPasswordDoesNotReencryptOtherUnchangedAccountsWhenVaultLocks()
+    {
+        using var directory = new TemporaryDirectory();
+        string path = directory.File("credentials.json");
+        var protector = new LockableProtector();
+        var configuration = Example();
+        configuration.Accounts.Add(new Account { Name = "other", Password = "synthetic-other" });
+        new ConfigurationStore(path, protector).Save(configuration);
+        var store = new ConfigurationStore(path, protector);
+        configuration = store.Load();
+        configuration.Find("student")!.RememberPassword = false;
+        int calls = protector.ProtectCalls;
+        protector.Locked = true;
+
+        store.Save(configuration);
+
+        Assert.Equal(calls, protector.ProtectCalls);
+        using (var document = JsonDocument.Parse(File.ReadAllText(path)))
+            Assert.Equal("", document.RootElement.GetProperty("accounts")[0].GetProperty("encryptedPassword").GetString());
+        protector.Locked = false;
+        var saved = new ConfigurationStore(path, protector).Load();
+        Assert.Equal("", saved.Find("student")!.Password);
+        Assert.False(saved.Find("student")!.RememberPassword);
+        Assert.Equal("synthetic-other", saved.Find("other")!.Password);
+    }
+
+    [Fact]
+    public void EnablingRememberAgainRequiresEncryptionAndKeepsTheSavedForgetChoiceOnFailure()
+    {
+        using var directory = new TemporaryDirectory();
+        string path = directory.File("credentials.json");
+        var protector = new LockableProtector();
+        var store = new ConfigurationStore(path, protector);
+        var configuration = Example();
+        store.Save(configuration);
+        configuration.Accounts[0].RememberPassword = false;
+        store.Save(configuration);
+        byte[] forgotten = File.ReadAllBytes(path);
+        configuration.Accounts[0].RememberPassword = true;
+        protector.Locked = true;
+
+        Assert.Throws<CryptographicException>(() => store.Save(configuration));
+        Assert.Equal(forgotten, File.ReadAllBytes(path));
+    }
+
+    [Fact]
+    public void ChangedPasswordRequiresEncryptionAndCannotReuseThePreviouslyVerifiedCiphertext()
+    {
+        using var directory = new TemporaryDirectory();
+        string path = directory.File("credentials.json");
+        var protector = new LockableProtector();
+        var store = new ConfigurationStore(path, protector);
+        store.Save(Example());
+        var configuration = store.Load();
+        byte[] original = File.ReadAllBytes(path);
+        configuration.Accounts[0].Password = "synthetic-changed";
+        protector.Locked = true;
+        Assert.Throws<CryptographicException>(() => store.Save(configuration));
+        Assert.Equal(original, File.ReadAllBytes(path));
+        protector.Locked = false;
+        store.Save(configuration);
+        Assert.Equal("synthetic-changed", new ConfigurationStore(path, protector).Load().Accounts[0].Password);
+    }
+
+    [Fact]
+    public void ReplacingAnAccountInstanceCannotReuseAnothersCachedCiphertext()
+    {
+        using var directory = new TemporaryDirectory();
+        string path = directory.File("credentials.json");
+        var protector = new LockableProtector();
+        var store = new ConfigurationStore(path, protector);
+        var configuration = Example();
+        store.Save(configuration);
+        byte[] original = File.ReadAllBytes(path);
+        configuration.Accounts[0] = Example().Accounts[0];
+        protector.Locked = true;
+        Assert.Throws<CryptographicException>(() => store.Save(configuration));
+        Assert.Equal(original, File.ReadAllBytes(path));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void FreshEncryptionAfterVaultKeyReplacementRefreshesAllRememberedCiphertexts(bool addAccount)
+    {
+        using var directory = new TemporaryDirectory();
+        string path = directory.File("credentials.json");
+        var keys = new RotatingKeyStore();
+        var protector = new VaultSecretProtector(keys);
+        var store = new ConfigurationStore(path, protector);
+        var configuration = Example();
+        configuration.Accounts.Add(new Account { Name = "unchanged", Password = "synthetic-unchanged" });
+        store.Save(configuration);
+        configuration = store.Load();
+        keys.ReplaceKey();
+        if (addAccount) configuration.Accounts.Add(new Account { Name = "new", Password = "synthetic-new" });
+        else configuration.Accounts[0].Password = "synthetic-changed";
+
+        store.Save(configuration);
+
+        Configuration loaded = new ConfigurationStore(path, protector).Load();
+        Assert.Equal("synthetic-unchanged", loaded.Find("unchanged")!.Password);
+        Assert.Equal(addAccount ? "synthetic-private-password" : "synthetic-changed", loaded.Find("student")!.Password);
+        if (addAccount) Assert.Equal("synthetic-new", loaded.Find("new")!.Password);
+    }
+
+    [Fact]
+    public void FailedAtomicPublishDoesNotAdvanceTheReusableCiphertext()
+    {
+        using var directory = new TemporaryDirectory();
+        string path = directory.File("credentials.json"), originalPath = directory.File("original.json");
+        var protector = new LockableProtector();
+        var store = new ConfigurationStore(path, protector);
+        store.Save(Example());
+        var configuration = store.Load();
+        string password = configuration.Accounts[0].Password;
+        byte[] original = File.ReadAllBytes(path);
+        configuration.Accounts[0].Password = "synthetic-not-published";
+        File.Move(path, originalPath);
+        Directory.CreateDirectory(path);
+        Exception? failure = Record.Exception(() => store.Save(configuration));
+        Assert.True(failure is IOException or UnauthorizedAccessException);
+        Assert.Equal(original, File.ReadAllBytes(originalPath));
+        Directory.Delete(path);
+        File.Move(originalPath, path);
+
+        configuration.Accounts[0].Password = password;
+        protector.Locked = true;
+        store.Save(configuration);
+        Assert.Equal(original, File.ReadAllBytes(path));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void LegacyCleanupFailureReturnsMigratedAccountsAndAnActionableWarning(bool accessDenied)
+    {
+        using var directory = new TemporaryDirectory();
+        string path = directory.File("credentials.json"), legacy = directory.File("gui.json");
+        const string original = """{"username":"student","password":"synthetic-legacy","autoLogin":true}""";
+        File.WriteAllText(legacy, original);
+        var store = new ConfigurationStore(path, new TestProtector(), legacy, _ =>
+        {
+            if (accessDenied) throw new UnauthorizedAccessException();
+            throw new IOException();
+        });
+
+        Configuration configuration = store.Load();
+
+        Assert.Equal("student", Assert.Single(configuration.Accounts).Name);
+        Assert.Equal("synthetic-legacy", configuration.Accounts[0].Password);
+        Assert.True(configuration.Auto);
+        Assert.Contains("旧明文文件未能删除", store.LoadWarning);
+        Assert.Contains(legacy, store.LoadWarning);
+        Assert.Equal(original, File.ReadAllText(legacy));
+        Assert.DoesNotContain("synthetic-legacy", File.ReadAllText(path));
+        configuration.Auto = false;
+        store.Save(configuration);
+        var reloaded = new ConfigurationStore(path, new TestProtector()).Load();
+        Assert.Equal("student", Assert.Single(reloaded.Accounts).Name);
+        Assert.False(reloaded.Auto);
+    }
+
+    [Fact]
     public void FailedLegacyEncryptionPreservesRecoverableOriginal()
     {
         using var directory = new TemporaryDirectory();
@@ -236,5 +400,31 @@ public sealed class ConfigurationStoreTests
         Assert.DoesNotContain("synthetic-windows-secret", encrypted);
         Assert.Equal("synthetic-windows-secret", protector.Unprotect(encrypted));
         Assert.Throws<InvalidDataException>(() => protector.Unprotect("invalid-base64"));
+    }
+
+    private sealed class LockableProtector : ISecretProtector
+    {
+        private readonly TestProtector inner = new();
+        public bool Locked;
+        public int ProtectCalls;
+        public string Protect(string plaintext)
+        {
+            ProtectCalls++;
+            if (Locked) throw new CryptographicException("Synthetic locked vault");
+            return inner.Protect(plaintext);
+        }
+        public string Unprotect(string ciphertext) => Locked
+            ? throw new CryptographicException("Synthetic locked vault") : inner.Unprotect(ciphertext);
+    }
+
+    private sealed class RotatingKeyStore : ICredentialKeyStore
+    {
+        private byte[] key = RandomNumberGenerator.GetBytes(32);
+        public byte[] GetOrCreateKey() => key.ToArray();
+        public void ReplaceKey()
+        {
+            CryptographicOperations.ZeroMemory(key);
+            key = RandomNumberGenerator.GetBytes(32);
+        }
     }
 }

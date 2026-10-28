@@ -97,6 +97,11 @@ public sealed class UpdateArchiveTests
     [InlineData("zip", "/escape", false)]
     [InlineData("zip", "C:/escape", false)]
     [InlineData("zip", "component\\..\\escape", false)]
+    [InlineData("zip", "component/.drcom-update.lock", false)]
+    [InlineData("zip", "component/.drcom-update-transaction/", true)]
+    [InlineData("zip", "component/.drcom4scut-update-stage/backup", false)]
+    [InlineData("zip", "component/.drcom-gui-new-fake.app/payload", false)]
+    [InlineData("zip", "component/.drcom-gui-old-fake.app/payload", false)]
     [InlineData("tar.gz", "component/../escape", false)]
     [InlineData("tar.gz", "component/../../escape", false)]
     [InlineData("tar.gz", "component/../stage-sibling/escape", false)]
@@ -104,6 +109,11 @@ public sealed class UpdateArchiveTests
     [InlineData("tar.gz", "/escape", false)]
     [InlineData("tar.gz", "C:/escape", false)]
     [InlineData("tar.gz", "component\\..\\escape", false)]
+    [InlineData("tar.gz", "component/.DRCOM-UPDATE.LOCK", false)]
+    [InlineData("tar.gz", "component/.drcom-update-transaction/", true)]
+    [InlineData("tar.gz", "component/.drcom4scut-update-stage/backup", false)]
+    [InlineData("tar.gz", "component/.drcom-gui-new-fake.app/payload", false)]
+    [InlineData("tar.gz", "component/.drcom-gui-old-fake.app/payload", false)]
     public async Task MaliciousArchiveMembersCannotCreateFilesOrDirectoriesOutsideTheirComponent(
         string format, string member, bool isDirectory)
     {
