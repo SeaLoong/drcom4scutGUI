@@ -8,6 +8,8 @@
 
 使用 `global.json` 指定的稳定版 .NET 10 SDK、C# 14 和 Avalonia。NuGet 锁文件固定依赖版本，发布包自带运行时。六个运行目标为 `win-x64`、`win-arm64`、`linux-x64`、`linux-arm64`、`osx-x64`、`osx-arm64`；这些系统与处理器组合也称为 RID。
 
+其他架构、glibc / musl 的边界、自包含体积及开发者手动轻量发布见[平台支持与发布体积](platform-support.md)。
+
 | 目录 | 职责 |
 | --- | --- |
 | `drcom4scutGUI` | Avalonia 窗口、托盘和桌面入口 |
