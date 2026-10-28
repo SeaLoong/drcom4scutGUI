@@ -17,6 +17,33 @@ public sealed class UpdateServiceTests
     private const string Asset = "drcom4scut-0.6.0-x86_64-unknown-linux-gnu.tar.gz";
     private const string Stem = "drcom4scut-0.6.0-x86_64-unknown-linux-gnu";
 
+    [Fact]
+    public async Task LoopbackServerCanCancelPendingAcceptAfterServingAResponse()
+    {
+        byte[] archive = Archive();
+        for (int iteration = 0; iteration < 32; iteration++)
+        {
+            await using var server = new LoopbackReleaseServer(archive);
+            using var client = new HttpClient(server.CreateHandler());
+            using var service = new UpdateService(client, "linux-x64", new UpdateOptions());
+            UpdateCheckResult result = await service.CheckAsync(UpdateComponent.Core, "0.5.1", TestContext.Current.CancellationToken);
+            Assert.True(result.IsUpdateAvailable);
+            Assert.Single(server.Requests);
+        }
+    }
+
+    [Fact]
+    public async Task LoopbackServerKeepsUnexpectedListenerFailuresVisibleDuringDisposal()
+    {
+        var listener = new TcpListener(IPAddress.Loopback, 0);
+        var server = new LoopbackReleaseServer(Archive(), listener: listener);
+        // The constructor enters the pending accept before returning. Stop the
+        // listener before requesting cancellation, not as part of cleanup.
+        listener.Stop();
+        await Assert.ThrowsAsync<SocketException>(() => server.Completion);
+        await Assert.ThrowsAsync<SocketException>(() => server.DisposeAsync().AsTask());
+    }
+
     [Theory]
     [InlineData("0.5.1", true)]
     [InlineData("drcom4scut 0.6.0", false)]
@@ -239,17 +266,19 @@ public sealed class UpdateServiceTests
     /// <summary>A real loopback HTTP server; requests still enter production code as fixed HTTPS proxy URLs.</summary>
     private sealed class LoopbackReleaseServer : IAsyncDisposable
     {
-        private readonly TcpListener listener = new(IPAddress.Loopback, 0);
+        private readonly TcpListener listener;
         private readonly CancellationTokenSource lifetime = new();
         private readonly Task run;
         private readonly byte[] archive;
         private readonly string fault;
         public List<string> Requests { get; } = [];
-        public LoopbackReleaseServer(byte[] archive, string fault = "")
+        public Task Completion => run;
+        public LoopbackReleaseServer(byte[] archive, string fault = "", TcpListener? listener = null)
         {
+            this.listener = listener ?? new TcpListener(IPAddress.Loopback, 0);
             this.archive = archive;
             this.fault = fault;
-            listener.Start();
+            this.listener.Start();
             run = ServeAsync();
         }
         public HttpMessageHandler CreateHandler() => new LoopbackHandler(((IPEndPoint)listener.LocalEndpoint).Port);
@@ -272,8 +301,10 @@ public sealed class UpdateServiceTests
                     await stream.WriteAsync(body, lifetime.Token);
                 }
             }
-            catch (OperationCanceledException) { }
+            catch (OperationCanceledException) when (lifetime.IsCancellationRequested) { }
             catch (ObjectDisposedException) when (lifetime.IsCancellationRequested) { }
+            catch (SocketException error) when (lifetime.IsCancellationRequested
+                && error.SocketErrorCode is SocketError.OperationAborted or SocketError.Interrupted) { }
         }
         private byte[] Response(string address)
         {
@@ -307,10 +338,18 @@ public sealed class UpdateServiceTests
         }
         public async ValueTask DisposeAsync()
         {
-            lifetime.Cancel();
-            listener.Stop();
-            await run;
-            lifetime.Dispose();
+            try
+            {
+                lifetime.Cancel();
+                // Let token-aware accept/read/write finish before closing the
+                // socket; closing it during a new accept can report a SocketException.
+                await run;
+            }
+            finally
+            {
+                listener.Stop();
+                lifetime.Dispose();
+            }
         }
         private sealed class LoopbackHandler(int port) : HttpMessageHandler
         {
