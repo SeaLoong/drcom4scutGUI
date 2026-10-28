@@ -67,6 +67,6 @@ Native AOT 和裁剪也可降低部分发布体积，但需检查反射、JSON �
 ## 官方资料
 
 - [.NET 10 系统、架构与 libc 要求](https://github.com/dotnet/core/blob/main/release-notes/10.0/supported-os.md)
-- [Avalonia 平台支持与支持等级](https://docs.avaloniaui.net/docs/overview/supported-platforms)
+- [Avalonia 平台支持与支持等级](https://docs.avaloniaui.net/docs/supported-platforms)
 - [.NET 自包含与依赖框架发布](https://learn.microsoft.com/en-us/dotnet/core/deploying/deploy-with-cli)
 - [Avalonia Native AOT 与限制](https://docs.avaloniaui.net/docs/deployment/native-aot)

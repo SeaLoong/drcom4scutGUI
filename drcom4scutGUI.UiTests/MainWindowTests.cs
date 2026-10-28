@@ -232,4 +232,54 @@ public sealed class MainWindowTests
         }
         finally { window.Close(); }
     });
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public Task ConfigurationRecoveryAllowsOnlyUnrememberedSessionPreparationWithoutOverwritingOriginal(bool lockedVault) => OnUi(() =>
+    {
+        string directory = Path.Combine(Path.GetTempPath(), "drcom-gui-recovery-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(directory);
+        string path = Path.Combine(directory, "config.json");
+        string original = lockedVault
+            ? "{\"schemaVersion\":2,\"accounts\":[{\"name\":\"saved\",\"encryptedPassword\":\"synthetic-ciphertext\"}]}"
+            : "{synthetic-invalid-json";
+        File.WriteAllText(path, original);
+        var protector = new UnavailableProtector();
+        var store = new ConfigurationStore(path, protector);
+        if (lockedVault) Assert.Throws<System.Security.Cryptography.CryptographicException>(() => store.Load());
+        else Assert.Throws<InvalidDataException>(() => store.Load());
+        Configuration configuration = new();
+        MainWindow window = new(true, configuration, null, null, null, store);
+        window.Show();
+        try
+        {
+            Find<AutoCompleteBox>(window, "nameComboBox").Text = "temporary-student";
+            Find<TextBox>(window, "passwordTextBox").Text = "synthetic-temporary-password";
+            Find<CheckBox>(window, "rememberCheckBox").IsChecked = true;
+            Assert.False(window.SaveInput(all: true, allowSessionOnly: true));
+            Find<CheckBox>(window, "rememberCheckBox").IsChecked = false;
+            Find<ComboBox>(window, "modeComboBox").SelectedIndex = 1;
+            Assert.False(window.SaveInput(all: true)); // Preference writes remain blocked.
+            Assert.True(window.SaveInput(all: true, allowSessionOnly: true));
+            Assert.False(Assert.Single(configuration.Accounts).RememberPassword);
+            Assert.Equal("synthetic-temporary-password", configuration.Accounts[0].Password);
+            Assert.True(configuration.NoUdp);
+            Assert.Contains("仅在内存中", Find<TextBlock>(window, "statusLabel").Text);
+            Assert.Equal(original, File.ReadAllText(path));
+            Assert.Equal(0, protector.ProtectCalls);
+        }
+        finally { window.Close(); Directory.Delete(directory, true); }
+    });
+
+    private sealed class UnavailableProtector : ISecretProtector
+    {
+        public int ProtectCalls;
+        public string Protect(string plaintext)
+        {
+            ProtectCalls++;
+            throw new System.Security.Cryptography.CryptographicException("Synthetic locked vault");
+        }
+        public string Unprotect(string ciphertext) => throw new System.Security.Cryptography.CryptographicException("Synthetic locked vault");
+    }
 }

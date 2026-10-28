@@ -10,11 +10,15 @@ public sealed class AuthenticationStatusTests
     [InlineData("portal", false, "portal", "online", false, true, CoreConnectionPhase.Online)]
     [InlineData("eap", false, "eth0", "online", true, true, CoreConnectionPhase.Online)]
     [InlineData("eap", true, "eth0", "online", true, true, CoreConnectionPhase.Online)]
+    [InlineData("eap", false, "portal", "online", true, true, CoreConnectionPhase.Online)]
+    [InlineData("eap", true, "portal", "online", true, true, CoreConnectionPhase.Online)]
     [InlineData("eap", false, "eth0", "udp-authentication", true, false, CoreConnectionPhase.UdpAuthentication)]
+    [InlineData("eap", false, "portal", "udp-authentication", true, false, CoreConnectionPhase.UdpAuthentication)]
     [InlineData("eap", false, "eth0", "eap-authentication", false, false, CoreConnectionPhase.EapAuthentication)]
     [InlineData("eap", false, "", "waiting-interface", false, false, CoreConnectionPhase.WaitingInterface)]
     [InlineData("portal", false, "portal", "portal-authentication", false, false, CoreConnectionPhase.PortalAuthentication)]
     [InlineData("eap", false, "eth0", "offline", false, false, CoreConnectionPhase.Offline)]
+    [InlineData("eap", false, "portal", "offline", false, false, CoreConnectionPhase.Offline)]
     public void CompleteStructuredStateSelectsOnlyTheCurrentProvidersPhase(string mode, bool noUdp, string adapter,
         string phase, bool eap, bool online, CoreConnectionPhase expected)
         => Assert.Equal(expected, AuthenticationStatus.Parse(Status(17, adapter, phase, eap, online), 17, mode, noUdp)?.Phase);
@@ -24,7 +28,8 @@ public sealed class AuthenticationStatusTests
     [InlineData("eap", false, "eth0", "online", true, false)]
     [InlineData("portal", false, "portal", "online", true, true)]
     [InlineData("portal", false, "eth0", "online", false, true)]
-    [InlineData("eap", false, "portal", "online", true, true)]
+    [InlineData("eap", false, "portal", "online", false, true)]
+    [InlineData("eap", false, "portal", "portal-authentication", false, false)]
     [InlineData("eap", true, "eth0", "udp-authentication", true, false)]
     [InlineData("portal", false, "portal", "offline", false, true)]
     [InlineData("eap", false, "eth0", "online-next", true, true)]

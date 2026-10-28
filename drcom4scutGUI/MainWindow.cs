@@ -80,7 +80,7 @@ public sealed partial class MainWindow : Window
         : this(skipBackend, initialConfiguration, null, null, null) { }
 
     internal MainWindow(bool skipBackend, Configuration? initialConfiguration, IUpdateClient? updateClient,
-        TimeProvider? timeProvider, Func<string, string, bool, Task<bool>>? updateDialog)
+        TimeProvider? timeProvider, Func<string, string, bool, Task<bool>>? updateDialog, ConfigurationStore? configurationStore = null)
     {
         this.skipBackend = skipBackend;
         this.updateDialog = updateDialog;
@@ -88,7 +88,7 @@ public sealed partial class MainWindow : Window
         string directory = PlatformPaths.ConfigurationDirectory;
         string legacy = Path.Combine(AppContext.BaseDirectory, "drcom4scutGUI.json");
         if (!File.Exists(legacy)) legacy = Path.Combine(Environment.CurrentDirectory, "gui.json");
-        store = new ConfigurationStore(Path.Combine(directory, "config.json"),
+        store = configurationStore ?? new ConfigurationStore(Path.Combine(directory, "config.json"),
             skipBackend ? new DisabledProtector() : SecretProtectorFactory.Create(), legacy);
         core = new CoreProcessSession(PlatformPaths.CoreExecutablePath);
         updates = new UpdateController(updateClient ?? (skipBackend ? new PreviewUpdateClient() : new DesktopUpdateClient(
@@ -204,7 +204,9 @@ public sealed partial class MainWindow : Window
             catch (Exception error)
             {
                 config = new Configuration();
-                await MessageAsync(error.Message + "\n原文件已保留。重新保存前请确认账号设置。\n" + store.FilePath, "账号配置未能读取");
+                await MessageAsync(error.Message + "\n原文件已保留。请解锁密码库或修复配置后重启；若要建立新配置，请先备份并移走原文件后重启。"
+                    + "\n也可取消“记住密码”，仅在本次会话中临时连接，账号和连接选项不会保存。\n"
+                    + (store.LoadFailurePath ?? store.FilePath), "账号配置未能读取");
             }
             InitUI();
             if (store.LoadWarning is { } warning) await MessageAsync(warning, "旧账号文件需要清理");
@@ -308,7 +310,7 @@ public sealed partial class MainWindow : Window
         loading = false;
     }
 
-    private bool SaveInput(bool all = false)
+    internal bool SaveInput(bool all = false, bool allowSessionOnly = false)
     {
         string username = (nameComboBox.Text ?? "").Trim();
         string password = passwordTextBox.Text ?? "";
@@ -344,11 +346,18 @@ public sealed partial class MainWindow : Window
             config.PortalClientIp = (portalClientIpTextBox.Text ?? "").Trim();
             config.AllowHttp = allowHttpCheckBox.IsChecked == true;
         }
-        if (skipBackend) return true;
+        if (skipBackend && !store.HasLoadFailure) return true;
         try { store.Save(config); return true; }
         catch (Exception error)
         {
-            label.Text = "配置未能安全保存。可取消“记住密码”后继续本次认证。";
+            if (store.HasLoadFailure)
+            {
+                bool sessionOnly = allowSessionOnly && rememberCheckBox.IsChecked != true;
+                label.Text = sessionOnly ? "本次连接仅在内存中使用账号和连接选项，不会更改原配置。"
+                    : "原账号配置尚未恢复，当前改动不会保存。可取消“记住密码”后临时连接；解锁或修复后请重启。";
+                return sessionOnly;
+            }
+            label.Text = "配置未能安全保存，当前修改尚未写入。";
             _ = MessageAsync(label.Text + "\n" + error.Message, "保存失败");
             return false;
         }
@@ -389,7 +398,7 @@ public sealed partial class MainWindow : Window
         { await MessageAsync("请输入账号和密码。", "输入不完整"); return; }
         if (!ValidIp(ip))
         { await MessageAsync("请输入 IPv4 地址，不指定时留空。", "地址不正确"); return; }
-        if (!SaveInput(all: true)) return;
+        if (!SaveInput(all: true, allowSessionOnly: true)) return;
         authenticated = false;
         authentication = CancellationTokenSource.CreateLinkedTokenSource(lifetime.Token);
         SetUIEnabled(false);

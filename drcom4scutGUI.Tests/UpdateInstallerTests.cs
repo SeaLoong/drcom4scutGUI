@@ -245,6 +245,76 @@ public sealed class UpdateInstallerTests
     }
 
     [Fact]
+    public async Task FinishedStageCleanupPreservesDiagnosticsLiveHelpersUnsafePathsAndInstallationBackups()
+    {
+        using var directory = new TemporaryDirectory();
+        string root = directory.File("updates"); UpdateInstaller.CreatePrivateDirectory(root);
+        UpdatePlan plan = Plan(directory);
+        string rollback = directory.File(Path.Combine("installed", ".drcom-update-" + Guid.NewGuid().ToString("N"), "backup"));
+        Directory.CreateDirectory(rollback);
+        File.WriteAllText(Path.Combine(rollback, "drcom4scutGUI.dll"), "original rollback payload");
+        string helper = Path.Combine(AppContext.BaseDirectory, "helpers", OperatingSystem.IsWindows() ? "FakeCore.exe" : "FakeCore");
+        using Process exited = new() { StartInfo = new(helper)
+            { UseShellExecute = false, RedirectStandardOutput = true, RedirectStandardError = true } };
+        exited.StartInfo.ArgumentList.Add("--version");
+        Assert.True(exited.Start());
+        await exited.WaitForExitAsync(TestContext.Current.CancellationToken);
+        Assert.Equal(0, exited.ExitCode);
+
+        string Stage(string? status, int pid, bool recent = false, string? name = null)
+        {
+            string stage = Path.Combine(root, name ?? "update-" + Guid.NewGuid().ToString("N"));
+            UpdateInstaller.CreatePrivateDirectory(stage);
+            File.WriteAllText(Path.Combine(stage, "plan.json"), JsonSerializer.Serialize(plan));
+            foreach (string payload in new[] { "new", "helper" })
+            {
+                Directory.CreateDirectory(Path.Combine(stage, payload));
+                File.WriteAllText(Path.Combine(stage, payload, "runtime.dll"), "staged runtime payload");
+            }
+            if (status is not null)
+            {
+                string marker = Path.Combine(stage, status);
+                File.WriteAllText(marker, pid.ToString(System.Globalization.CultureInfo.InvariantCulture));
+                File.SetLastWriteTimeUtc(marker, recent ? DateTime.UtcNow : DateTime.UtcNow.AddMinutes(-10));
+            }
+            return stage;
+        }
+
+        string unsafeName = Stage("failed", exited.Id, name: "update-invalid");
+        string failed = Stage("failed", exited.Id), complete = Stage("complete", exited.Id);
+        string recent = Stage("failed", exited.Id, recent: true), running = Stage("failed", Environment.ProcessId);
+        string pending = Stage(null, exited.Id), invalidPid = Stage("failed", 0);
+        List<string> retained = [unsafeName, recent, running, pending, invalidPid];
+        if (!OperatingSystem.IsWindows())
+        {
+            string publicStage = Stage("failed", exited.Id);
+            File.SetUnixFileMode(publicStage, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute | UnixFileMode.GroupRead);
+            retained.Add(publicStage);
+            string linkedMarker = Stage("failed", exited.Id);
+            string outsideMarker = directory.File("outside-status");
+            File.Move(Path.Combine(linkedMarker, "failed"), outsideMarker);
+            File.CreateSymbolicLink(Path.Combine(linkedMarker, "failed"), outsideMarker);
+            retained.Add(linkedMarker);
+            string linkedStage = Stage("failed", exited.Id);
+            string outsideStage = directory.File("outside-stage");
+            Directory.Move(linkedStage, outsideStage);
+            Directory.CreateSymbolicLink(linkedStage, outsideStage);
+            retained.Add(linkedStage);
+        }
+
+        UpdateHelper.CleanupCompleted(root);
+
+        Assert.False(Directory.Exists(failed));
+        Assert.False(Directory.Exists(complete));
+        foreach (string stage in retained)
+        {
+            Assert.True(Directory.Exists(stage), stage);
+            Assert.True(File.Exists(Path.Combine(stage, "new", "runtime.dll")), stage);
+        }
+        Assert.Equal("original rollback payload", File.ReadAllText(Path.Combine(rollback, "drcom4scutGUI.dll")));
+    }
+
+    [Fact]
     public async Task HelperDetectsAddedPayloadFilesAndTamperedContents()
     {
         using var directory = new TemporaryDirectory();
@@ -291,6 +361,37 @@ public sealed class UpdateInstallerTests
         Assert.Equal("old GUI", File.ReadAllText(plan.TargetExecutable));
         Assert.Equal("old core", File.ReadAllText(core));
         Assert.Equal("existing private account sentinel", File.ReadAllText(directory.File("accounts.json")));
+        Assert.Empty(Directory.GetDirectories(directory.Path, ".drcom-update-*"));
+    }
+
+    [Fact]
+    public async Task GuiHelperChecksCoreCompatibilityUnderTheSharedLockAfterAnotherUpdateRollsBack()
+    {
+        using var directory = new TemporaryDirectory();
+        UpdatePlan plan = Plan(directory);
+        string source = directory.File("new"); Directory.CreateDirectory(source);
+        File.WriteAllText(Path.Combine(source, "BUILD-INFO.json"), "{\"minimum_core_version\":\"0.6.0\"}");
+        string core = directory.File(UpdateInstaller.CoreName(UpdateService.NativeRuntime));
+        File.WriteAllText(core, "drcom4scut 0.8.0");
+        bool probed = false, activated = false;
+        Task Activate() { activated = true; return Task.CompletedTask; }
+        Task<string> Probe(string path, CancellationToken _)
+        {
+            probed = true;
+            Assert.Throws<IOException>(() => UpdateInstaller.OpenInstallLock(directory.Path));
+            return Task.FromResult(File.ReadAllText(path));
+        }
+        using (UpdateInstaller.OpenInstallLock(directory.Path))
+            await Assert.ThrowsAsync<IOException>(() => UpdateHelper.ApplyGuiUpdateAsync(source, plan, Activate, Probe));
+        Assert.False(probed); // Never inspect a core installed by an unfinished transaction.
+
+        File.WriteAllText(core, "drcom4scut 0.5.1"); // The other updater failed verification and rolled back.
+        var failure = await Assert.ThrowsAsync<InvalidDataException>(() => UpdateHelper.ApplyGuiUpdateAsync(source, plan, Activate, Probe));
+        Assert.True(probed);
+        Assert.Contains("先检查核心更新", failure.Message);
+        Assert.False(activated);
+        Assert.Equal("old GUI", File.ReadAllText(plan.TargetExecutable));
+        Assert.Equal("drcom4scut 0.5.1", File.ReadAllText(core));
         Assert.Empty(Directory.GetDirectories(directory.Path, ".drcom-update-*"));
     }
 

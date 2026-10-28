@@ -43,10 +43,13 @@ public sealed class ConfigurationStore
     private readonly string? legacyPath;
     private readonly Action<string> deleteLegacy;
     private readonly Dictionary<Account, ProtectedPassword> protectedPasswords = new(ReferenceEqualityComparer.Instance);
+    private string? failedLoadSource;
     private sealed record ProtectedPassword(string Password, string Ciphertext);
 
     public string FilePath { get; }
     public string? LoadWarning { get; private set; }
+    public bool HasLoadFailure => failedLoadSource is not null;
+    public string? LoadFailurePath => failedLoadSource;
 
     public ConfigurationStore(string path, ISecretProtector protector, string? legacyPath = null)
         : this(path, protector, legacyPath, File.Delete) { }
@@ -62,16 +65,54 @@ public sealed class ConfigurationStore
     public Configuration Load()
     {
         LoadWarning = null;
-        string? source = File.Exists(FilePath) ? FilePath :
-            legacyPath is not null && File.Exists(legacyPath) ? Path.GetFullPath(legacyPath) : null;
-        if (source is null) { protectedPasswords.Clear(); return new Configuration(); }
+        string source = FilePath;
+        try
+        {
+            // File.Exists also returns false for permission/IO errors. Reading
+            // directly must distinguish missing data from unreadable accounts
+            // before falling back or allowing an empty configuration to save.
+            byte[]? bytes = ReadIfPresent(source);
+            if (bytes is null && legacyPath is not null)
+            {
+                source = Path.GetFullPath(legacyPath);
+                bytes = ReadIfPresent(source);
+            }
+            if (bytes is null)
+            {
+                protectedPasswords.Clear();
+                failedLoadSource = null;
+                return new Configuration();
+            }
+            Configuration configuration = LoadExisting(source, bytes);
+            failedLoadSource = null;
+            return configuration;
+        }
+        catch
+        {
+            // The caller may display an empty fallback after a locked vault or
+            // malformed file. Its next preference save must not erase accounts
+            // that have not been successfully loaded.
+            failedLoadSource = source;
+            throw;
+        }
+    }
+
+    private static byte[]? ReadIfPresent(string source)
+    {
+        try { return File.ReadAllBytes(source); }
+        catch (FileNotFoundException) { return null; }
+        catch (DirectoryNotFoundException) { return null; }
+    }
+
+    private Configuration LoadExisting(string source, byte[] bytes)
+    {
         Dictionary<Account, ProtectedPassword> loadedPasswords = new(ReferenceEqualityComparer.Instance);
         Configuration configuration;
         bool requiresMigration;
         bool plaintextSource;
         try
         {
-            using JsonDocument document = JsonDocument.Parse(File.ReadAllBytes(source));
+            using JsonDocument document = JsonDocument.Parse(bytes);
             JsonElement root = document.RootElement;
             if (root.ValueKind != JsonValueKind.Object) throw new InvalidDataException("配置必须是 JSON 对象。");
             int schema = root.TryGetProperty("schemaVersion", out JsonElement version) ? version.GetInt32() : 1;
@@ -131,7 +172,7 @@ public sealed class ConfigurationStore
         foreach (var entry in loadedPasswords) protectedPasswords.Add(entry.Key, entry.Value);
         if (requiresMigration)
         {
-            Save(configuration);
+            SaveCore(configuration);
             if (source != FilePath)
             {
                 // Do not retain a plaintext .bak alongside the encrypted migration.
@@ -147,6 +188,14 @@ public sealed class ConfigurationStore
     }
 
     public void Save(Configuration configuration)
+    {
+        ArgumentNullException.ThrowIfNull(configuration);
+        if (failedLoadSource is not null)
+            throw new InvalidOperationException("原账号配置未能读取，当前修改未保存。请解锁密码库或修复配置后重新启动；若要建立新配置，请先移走原文件并重新启动：\n" + failedLoadSource);
+        SaveCore(configuration);
+    }
+
+    private void SaveCore(Configuration configuration)
     {
         ArgumentNullException.ThrowIfNull(configuration);
         PortalOptions.ValidateStored(configuration);

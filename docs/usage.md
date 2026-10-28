@@ -33,7 +33,7 @@ Windows 在“设置 → 系统 → 关于”查看系统类型；Mac 在“苹�
 | Linux，Intel / AMD | `linux-x64.tar.gz` | `drcom4scutGUI` |
 | Linux，ARM64 | `linux-arm64.tar.gz` | `drcom4scutGUI` |
 
-例如，Windows x64 的文件名形如 `drcom4scut-desktop-core-0.5.1-gui-3.1.1-win-x64.zip`。保留解压出的完整文件夹；`Source code` 是开发用源码。
+文件名采用 `drcom4scut-desktop-core-{核心版本}-gui-{界面版本}-{平台}`，按系统以 `.zip` 或 `.tar.gz` 结尾，版本号以所选发布为准。保留解压出的完整文件夹；`Source code` 是开发用源码。
 
 需要检查下载完整性时，可将压缩包的 SHA-256 与同一发布页 `SHA256SUMS` 中对应的值比较：Windows 用 `Get-FileHash 文件名 -Algorithm SHA256`，Mac 用 `shasum -a 256 文件名`，Linux 用 `sha256sum 文件名`。
 
@@ -148,12 +148,12 @@ Windows 的右下角托盘、Mac 的顶部菜单栏都有程序图标。连接�
 
 | 遇到的情况 | 处理方法 |
 | --- | --- |
-| 找不到核心或版本不兼容 | 按[下载对应表](#下载哪一个核心包)重新完整解压对应系统的桌面包，保留全部文件 |
+| 找不到核心或版本不兼容 | 按[下载对应表](#下载哪一个桌面包)重新完整解压对应系统的桌面包，保留全部文件 |
 | Mac 核心无法启动 | 在终端运行 `./drcom4scut --version`，完成系统允许后再试 |
 | 有线环境自检未通过 | Windows 检查 Npcap；Mac、Linux 按安装步骤完成核心授权，再核对网卡 |
 | 填好账号仍连接失败 | 核对账号后缀、密码、网线与所选网卡，查看窗口下方的学校返回信息 |
 | 浏览器能登录，校园网页认证失败 | 使用浏览器上网，并按[无线说明](#无线-portal)核对入口与页面类型 |
-| 密码无法保存 | 解锁系统密码库，或取消“记住密码”后输入密码连接 |
+| 密码无法保存 | 已加载账号时，解锁系统密码库或取消“记住密码”后输入；启动读取失败时按[账号恢复说明](security.md#更换或删除账号)处理 |
 | Linux 中文显示方框 | 安装中文字体，如 Ubuntu 的 `fonts-noto-cjk` |
 | 窗口找不到了 | 从 Windows 托盘或 Mac 菜单栏图标选择“打开” |
 

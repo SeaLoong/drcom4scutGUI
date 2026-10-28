@@ -21,9 +21,9 @@
 | Mac，Apple 芯片或 Intel，macOS 15 及以上 | [Mac 安装与连接](docs/macos.md) |
 | Linux 图形桌面，x64 或 ARM64 | [Linux 桌面安装与连接](docs/linux.md) |
 
-下载一个文件名含 **`desktop`** 的桌面包，完整解压后打开程序即可。包内已配好图形界面、认证核心和运行组件，也能直接使用命令行。下载页提供最新版本，包括标为 **Pre-release** 的预览版。
+下载一个文件名含 **`desktop`** 的桌面包，完整解压后打开程序即可。包内已配好图形界面、认证核心和运行组件，也能直接使用命令行。下载入口打开最新正式版（**Latest**）；需要标为 **Pre-release** 的预览版或历史版本时，查看[全部发行记录](https://github.com/SeaLoong/drcom4scut/releases)。
 
-直接查文件名可看[下载对应表](docs/usage.md#下载哪一个核心包)。OpenWrt 路由器使用[路由器指南](https://github.com/SeaLoong/drcom4scut/blob/master/docs/openwrt.md)。
+直接查文件名可看[下载对应表](docs/usage.md#下载哪一个桌面包)。OpenWrt 路由器使用[路由器指南](https://github.com/SeaLoong/drcom4scut/blob/master/docs/openwrt.md)。
 
 ## 第一次登录
 

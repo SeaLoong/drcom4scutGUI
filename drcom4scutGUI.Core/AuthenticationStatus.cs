@@ -39,7 +39,9 @@ public static class AuthenticationStatus
                 || !root.TryGetProperty("eap_authenticated", out JsonElement eap) || eap.ValueKind is not (JsonValueKind.True or JsonValueKind.False)) return null;
 
             bool portal = mode == "portal";
-            if (portal != (adapter.GetString() == "portal")) return null;
+            // EAP uses the OS interface name, which may itself be "portal".
+            // Provider identity comes from the launch options and phase/flags.
+            if (portal && adapter.GetString() != "portal") return null;
             bool isOnline = online.GetBoolean();
             bool authorized = eap.GetBoolean();
             CoreConnectionPhase? result = phase.GetString() switch

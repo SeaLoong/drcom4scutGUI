@@ -1,4 +1,5 @@
 using System.Security.Cryptography;
+using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
 using System.Text.Json;
 using Xunit;
@@ -136,6 +137,153 @@ public sealed class ConfigurationStoreTests
         Assert.Throws<CryptographicException>(() => store.Save(Example()));
         Assert.Equal(original, File.ReadAllBytes(path));
         Assert.Equal([path], Directory.GetFiles(directory.Path));
+    }
+
+    [Fact]
+    public void FailedVaultLoadCannotOverwriteRecoverableAccountsWithAnEmptyFallback()
+    {
+        using var directory = new TemporaryDirectory();
+        string path = directory.File("credentials.json");
+        var protector = new LockableProtector();
+        new ConfigurationStore(path, protector).Save(Example());
+        byte[] original = File.ReadAllBytes(path);
+        var store = new ConfigurationStore(path, protector);
+        protector.Locked = true;
+
+        Assert.Throws<CryptographicException>(() => store.Load());
+        Assert.True(store.HasLoadFailure);
+        Assert.Equal(path, store.LoadFailurePath);
+        var fallback = new Configuration { NoUdp = true };
+        fallback.Accounts.Add(new Account { Name = "temporary", Password = "synthetic-temporary", RememberPassword = false });
+        InvalidOperationException failure = Assert.Throws<InvalidOperationException>(() => store.Save(fallback));
+        Assert.Contains("原账号配置未能读取", failure.Message);
+        Assert.Equal(original, File.ReadAllBytes(path));
+        Assert.Equal([path], Directory.GetFiles(directory.Path));
+
+        protector.Locked = false;
+        var recovered = store.Load();
+        Assert.False(store.HasLoadFailure);
+        Assert.Null(store.LoadFailurePath);
+        Assert.Equal("synthetic-private-password", Assert.Single(recovered.Accounts).Password);
+        recovered.NoUdp = true;
+        store.Save(recovered);
+        Assert.True(new ConfigurationStore(path, protector).Load().NoUdp);
+    }
+
+    [Theory]
+    [InlineData("{not-json", typeof(InvalidDataException))]
+    [InlineData("""{"schemaVersion":2,"accounts":[{"name":"student","encryptedPassword":"broken"}]}""", typeof(CryptographicException))]
+    public void UnreadableConfigurationMustBeRecoveredOrMovedBeforeFallbackCanBeSaved(string original, Type failureType)
+    {
+        using var directory = new TemporaryDirectory();
+        string path = directory.File("credentials.json");
+        File.WriteAllText(path, original);
+        var store = new ConfigurationStore(path, new TestProtector());
+
+        Assert.Throws(failureType, () => store.Load());
+        Assert.True(store.HasLoadFailure);
+        Assert.Throws<InvalidOperationException>(() => store.Save(new Configuration()));
+        Assert.Equal(original, File.ReadAllText(path));
+
+        string recovery = directory.File("recover-manually.json");
+        File.Move(path, recovery);
+        Assert.Throws<InvalidOperationException>(() => store.Save(new Configuration()));
+        var empty = store.Load();
+        Assert.False(store.HasLoadFailure);
+        Assert.Empty(empty.Accounts);
+        store.Save(empty);
+        Assert.Equal(original, File.ReadAllText(recovery));
+        Assert.Empty(new ConfigurationStore(path, new TestProtector()).Load().Accounts);
+    }
+
+    [Fact]
+    public void FailedLegacyMigrationCannotBeHiddenBySavingAnEmptyPrimary()
+    {
+        using var directory = new TemporaryDirectory();
+        string path = directory.File("credentials.json");
+        string legacy = directory.File("gui.json");
+        const string original = """{"username":"student","password":"synthetic-legacy"}""";
+        File.WriteAllText(legacy, original);
+        var protector = new LockableProtector { Locked = true };
+        var store = new ConfigurationStore(path, protector, legacy);
+
+        Assert.Throws<CryptographicException>(() => store.Load());
+        Assert.Equal(legacy, store.LoadFailurePath);
+        Assert.Throws<InvalidOperationException>(() => store.Save(new Configuration()));
+        Assert.False(File.Exists(path));
+        Assert.Equal(original, File.ReadAllText(legacy));
+
+        protector.Locked = false;
+        var recovered = store.Load();
+        Assert.False(store.HasLoadFailure);
+        Assert.Equal("synthetic-legacy", Assert.Single(recovered.Accounts).Password);
+        Assert.False(File.Exists(legacy));
+        Assert.Equal("synthetic-legacy", Assert.Single(new ConfigurationStore(path, protector).Load().Accounts).Password);
+    }
+
+    public static bool IsUnprivilegedUnix => !OperatingSystem.IsWindows() && GetEffectiveUserId() != 0;
+
+    [DllImport("libc", EntryPoint = "geteuid")]
+    private static extern uint GetEffectiveUserId();
+
+    [Theory(SkipUnless = nameof(IsUnprivilegedUnix), Skip = "Permission denial requires a non-root Unix runner")]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void InaccessibleConfigurationParentCannotBeTreatedAsMissing(bool legacySource)
+    {
+        if (OperatingSystem.IsWindows() || GetEffectiveUserId() == 0) return;
+        using var directory = new TemporaryDirectory();
+        string locked = directory.File("private-accounts");
+        string source = Path.Combine(locked, "credentials.json");
+        new ConfigurationStore(source, new TestProtector()).Save(Example());
+        byte[] original = File.ReadAllBytes(source);
+        string path = legacySource ? directory.File("new-credentials.json") : source;
+        string legacy = legacySource ? source : directory.File("legacy.json");
+        // An unreadable primary must not fall through to an unrelated readable
+        // legacy document, whose migration would replace the primary as well.
+        if (!legacySource) File.WriteAllText(legacy, """{"accounts":[]}""");
+        var store = new ConfigurationStore(path, new TestProtector(), legacy);
+        File.SetUnixFileMode(locked, UnixFileMode.None);
+        try
+        {
+            Assert.False(File.Exists(source));
+            Assert.Throws<UnauthorizedAccessException>(() => store.Load());
+            Assert.True(store.HasLoadFailure);
+            Assert.Equal(source, store.LoadFailurePath);
+            Assert.Throws<InvalidOperationException>(() => store.Save(new Configuration()));
+            Assert.Equal(UnixFileMode.None, File.GetUnixFileMode(locked));
+        }
+        finally
+        {
+            File.SetUnixFileMode(locked, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        }
+        Assert.Equal(original, File.ReadAllBytes(source));
+        if (legacySource) Assert.False(File.Exists(path));
+
+        Configuration recovered = store.Load();
+        Assert.False(store.HasLoadFailure);
+        Assert.Equal("synthetic-private-password", Assert.Single(recovered.Accounts).Password);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void ConfigurationPathThatIsADirectoryCannotBeTreatedAsMissing(bool legacySource)
+    {
+        using var directory = new TemporaryDirectory();
+        string source = directory.File("unexpected-directory");
+        Directory.CreateDirectory(source);
+        string marker = Path.Combine(source, "existing-data.txt");
+        File.WriteAllText(marker, "synthetic-existing-data");
+        string path = legacySource ? directory.File("new-credentials.json") : source;
+        var store = new ConfigurationStore(path, new TestProtector(), legacySource ? source : null);
+
+        Assert.Throws<UnauthorizedAccessException>(() => store.Load());
+        Assert.True(store.HasLoadFailure);
+        Assert.Equal(source, store.LoadFailurePath);
+        Assert.Throws<InvalidOperationException>(() => store.Save(new Configuration()));
+        Assert.Equal("synthetic-existing-data", File.ReadAllText(marker));
+        if (legacySource) Assert.False(File.Exists(path));
     }
 
     [Fact]

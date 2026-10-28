@@ -79,13 +79,7 @@ public static class UpdateHelper
             if (await UpdateInstaller.HashAsync(plan.TargetExecutable, CancellationToken.None).ConfigureAwait(false) != plan.TargetSha256)
                 throw new InvalidDataException("等待退出时安装目标已改变。");
             await VerifyPayloadAsync(source, plan, CancellationToken.None).ConfigureAwait(false);
-            await UpdateInstaller.ValidateGuiInstallAsync(new PreparedUpdate(plan.Release, source, directory), plan.TargetExecutable, CancellationToken.None).ConfigureAwait(false);
-            if (plan.Release.Runtime.StartsWith("osx-", StringComparison.Ordinal))
-                await ApplyMacAppAsync(source, plan.TargetExecutable, () => RestartAsync(plan.TargetExecutable)).ConfigureAwait(false);
-            else
-                await UpdateInstaller.ApplyFilesAsync(source, Path.GetDirectoryName(plan.TargetExecutable)!, plan.Files,
-                    () => VerifyPayloadAsync(Path.GetDirectoryName(plan.TargetExecutable)!, plan, CancellationToken.None, installed: true),
-                    () => RestartAsync(plan.TargetExecutable), CancellationToken.None).ConfigureAwait(false);
+            await ApplyGuiUpdateAsync(source, plan, () => RestartAsync(plan.TargetExecutable)).ConfigureAwait(false);
             WriteStatus(directory, "complete");
         }
         catch
@@ -104,7 +98,7 @@ public static class UpdateHelper
         {
             parent?.Dispose();
             // Windows keeps the helper's own runtime files open. A later normal startup
-            // removes completed private stages after their helper has exited.
+            // removes finished private stages after their helper has exited.
             if (!OperatingSystem.IsWindows() && File.Exists(Path.Combine(directory, "complete"))) UpdateInstaller.TryDeleteDirectory(directory);
         }
     }
@@ -181,11 +175,27 @@ public static class UpdateHelper
         // the locally hashed plan defines only the GUI files this transaction may touch.
     }
 
-    internal static async Task ApplyMacAppAsync(string source, string nativeExecutable, Func<Task> activate)
+    internal static async Task ApplyGuiUpdateAsync(string source, UpdatePlan plan, Func<Task> activate,
+        Func<string, CancellationToken, Task<string>>? versionProbe = null)
+    {
+        // A core updater can replace and then roll back its executable. Probe
+        // compatibility only while holding the shared installation lock.
+        Task BeforeApply() => UpdateInstaller.ValidateGuiInstallAsync(new PreparedUpdate(plan.Release, source, source),
+            plan.TargetExecutable, versionProbe, CancellationToken.None);
+        if (plan.Release.Runtime.StartsWith("osx-", StringComparison.Ordinal))
+            await ApplyMacAppAsync(source, plan.TargetExecutable, activate, BeforeApply).ConfigureAwait(false);
+        else
+            await UpdateInstaller.ApplyFilesAsync(source, Path.GetDirectoryName(plan.TargetExecutable)!, plan.Files,
+                () => VerifyPayloadAsync(Path.GetDirectoryName(plan.TargetExecutable)!, plan, CancellationToken.None, installed: true),
+                activate, CancellationToken.None, beforeApply: BeforeApply).ConfigureAwait(false);
+    }
+
+    internal static async Task ApplyMacAppAsync(string source, string nativeExecutable, Func<Task> activate, Func<Task>? beforeApply = null)
     {
         string target = UpdateInstaller.MacBundle(nativeExecutable);
         string parent = Path.GetDirectoryName(target)!;
         using FileStream gate = UpdateInstaller.OpenInstallLock(parent);
+        if (beforeApply is not null) await beforeApply().ConfigureAwait(false);
         string incoming = Path.Combine(parent, ".drcom-gui-new-" + Guid.NewGuid().ToString("N") + ".app");
         string backup = Path.Combine(parent, ".drcom-gui-old-" + Guid.NewGuid().ToString("N") + ".app");
         bool movedOriginal = false, installed = false, rollbackSucceeded = true;
@@ -247,23 +257,32 @@ public static class UpdateHelper
         catch (Exception error) when (error is IOException or UnauthorizedAccessException) { if (name == "ready") throw; }
     }
 
-    internal static void CleanupCompleted()
+    internal static void CleanupCompleted(string? allowedRoot = null)
     {
         try
         {
-            if (!Directory.Exists(UpdateInstaller.UpdatesRoot)) return;
-            UpdateInstaller.RejectLinks(UpdateInstaller.UpdatesRoot);
-            foreach (string directory in Directory.EnumerateDirectories(UpdateInstaller.UpdatesRoot, "update-*"))
+            string root = allowedRoot ?? UpdateInstaller.UpdatesRoot;
+            if (!Directory.Exists(root)) return;
+            UpdateInstaller.RejectLinks(root);
+            foreach (string directory in Directory.EnumerateDirectories(root, "update-*"))
             {
-                string completed = Path.Combine(directory, "complete");
-                if (!File.Exists(completed) || DateTime.UtcNow - File.GetLastWriteTimeUtc(completed) < TimeSpan.FromMinutes(5)) continue;
-                _ = ValidatePlanPath(Path.Combine(directory, "plan.json"));
-                if (int.TryParse(File.ReadAllText(completed), out int id))
+                try
                 {
+                    string marker = Path.Combine(directory, "complete");
+                    if (!File.Exists(marker)) marker = Path.Combine(directory, "failed");
+                    if (!File.Exists(marker) || DateTime.UtcNow - File.GetLastWriteTimeUtc(marker) < TimeSpan.FromMinutes(5)) continue;
+                    _ = ValidatePlanPath(Path.Combine(directory, "plan.json"), root);
+                    UpdateInstaller.RejectLinks(marker);
+                    if (new FileInfo(marker).Length is <= 0 or > 32
+                        || !int.TryParse(File.ReadAllText(marker), out int id) || id <= 0) continue;
                     try { using Process helper = Process.GetProcessById(id); if (!helper.HasExited) continue; }
                     catch (ArgumentException) { }
+                    // Installation rollback backups live outside this private stage.
+                    // Keep recent failures for diagnostics and never remove a live helper.
+                    UpdateInstaller.TryDeleteDirectory(directory);
                 }
-                UpdateInstaller.TryDeleteDirectory(directory);
+                catch (Exception error) when (error is IOException or InvalidDataException or UnauthorizedAccessException or InvalidOperationException
+                    or System.ComponentModel.Win32Exception) { }
             }
         }
         catch (Exception error) when (error is IOException or InvalidDataException or UnauthorizedAccessException or InvalidOperationException
