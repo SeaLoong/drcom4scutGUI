@@ -99,14 +99,15 @@ public sealed partial class MainWindow : Window
             if (Dispatcher.UIThread.CheckAccess()) RefreshUpdateUI();
             else Dispatcher.UIThread.Post(RefreshUpdateUI);
         };
-        Title = $"drcom4scutGUI {GuiVersion}";
-        Width = 560;
-        Height = 740;
-        MinWidth = 430;
-        MinHeight = 420;
+        Title = "校园连接";
+        Width = 520;
+        Height = 720;
+        MinWidth = 440;
+        MinHeight = 520;
         WindowStartupLocation = WindowStartupLocation.CenterScreen;
         using (Stream stream = AssetLoader.Open(new Uri("avares://drcom4scutGUI/DrClient.ico"))) Icon = new WindowIcon(stream);
         BuildContent();
+        label.PropertyChanged += (_, change) => { if (change.Property == TextBlock.TextProperty) RefreshStatusPresentation(); };
         nameComboBox.TextChanged += (_, _) => AccountTextChanged();
         ipTextBox.TextChanged += (_, _) => ValidateIp();
         modeComboBox.SelectionChanged += (_, _) => { UpdateModeUI(); SavePreferences(); };
@@ -124,73 +125,6 @@ public sealed partial class MainWindow : Window
         Opened += async (_, _) => await InitializeAsync();
         Closing += WindowClosing;
         if (skipBackend) InitUI();
-    }
-
-    private void BuildContent()
-    {
-        StackPanel fields = new() { Spacing = 9, Margin = new Thickness(20, 16) };
-        fields.Children.Add(Row("模式", modeComboBox));
-        fields.Children.Add(Row("网卡", macComboBox));
-        Grid accountRow = new() { ColumnDefinitions = new ColumnDefinitions("*,Auto"), ColumnSpacing = 7 };
-        accountRow.Children.Add(nameComboBox);
-        Grid.SetColumn(deleteButton, 1);
-        accountRow.Children.Add(deleteButton);
-        fields.Children.Add(Row("账号", accountRow));
-        fields.Children.Add(Row("密码", passwordTextBox));
-        fields.Children.Add(Row("", rememberCheckBox));
-        fields.Children.Add(Row("本机 IP（可选）", ipTextBox));
-        portalPanel.Children.Add(new TextBlock { Text = "校园网页登录", FontWeight = FontWeight.SemiBold });
-        portalPanel.Children.Add(Row("登录页地址", portalBaseTextBox));
-        StackPanel advancedPortal = new() { Spacing = 7 };
-        advancedPortal.Children.Add(Row("API 地址", portalApiTextBox));
-        advancedPortal.Children.Add(Row("AC IPv4", portalAcIpTextBox));
-        advancedPortal.Children.Add(Row("载荷 IPv4", portalClientIpTextBox));
-        portalPanel.Children.Add(new Expander
-        {
-            Name = "advancedPortalExpander", Header = "更多网页设置（通常留空）",
-            Content = advancedPortal, HorizontalAlignment = HorizontalAlignment.Stretch
-        });
-        portalPanel.Children.Add(allowHttpCheckBox);
-        portalPanel.Children.Add(new TextBlock
-        {
-            Text = "先在浏览器中打开校园登录页，再填写该页地址。HTTPS 可加密传输；学校提供 HTTP 登录页时，勾选上面的选项后连接，账号密码会以明文传输。",
-            TextWrapping = TextWrapping.Wrap
-        });
-        fields.Children.Add(portalPanel);
-        StackPanel preferences = new() { Spacing = 3 };
-        preferences.Children.Add(autoCheckBox);
-        preferences.Children.Add(startupCheckBox);
-        Grid controls = new() { ColumnDefinitions = new ColumnDefinitions("*,Auto"), Margin = new Thickness(0, 5) };
-        controls.Children.Add(preferences);
-        Grid.SetColumn(loginButton, 1);
-        controls.Children.Add(loginButton);
-        fields.Children.Add(controls);
-        updatePanel.Children.Add(guiUpdateNotice);
-        updatePanel.Children.Add(coreUpdateNotice);
-        updatePanel.Children.Add(updateProgress);
-        fields.Children.Add(updatePanel);
-        fields.Children.Add(new Border { Child = label, Padding = new Thickness(9), BorderThickness = new Thickness(1), BorderBrush = Brushes.Gray, CornerRadius = new CornerRadius(4) });
-        StackPanel tools = new() { Orientation = Orientation.Horizontal, Spacing = 8 };
-        tools.Children.Add(doctorButton);
-        Button export = new() { Name = "exportButton", Content = "导出诊断" };
-        export.Click += async (_, _) => await ExportAsync();
-        tools.Children.Add(export);
-        fields.Children.Add(tools);
-        StackPanel updateTools = new() { Orientation = Orientation.Horizontal, Spacing = 8 };
-        updateTools.Children.Add(checkUpdateButton);
-        updateTools.Children.Add(checkCoreUpdateButton);
-        fields.Children.Add(updateTools);
-        fields.Children.Add(logTextBox);
-        Content = new ScrollViewer { Content = fields, HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled };
-    }
-
-    private static Grid Row(string caption, Control input)
-    {
-        Grid grid = new() { ColumnDefinitions = new ColumnDefinitions("110,*"), ColumnSpacing = 8 };
-        grid.Children.Add(new TextBlock { Text = caption, VerticalAlignment = VerticalAlignment.Center });
-        Grid.SetColumn(input, 1);
-        grid.Children.Add(input);
-        return grid;
     }
 
     private async Task InitializeAsync()
@@ -213,15 +147,14 @@ public sealed partial class MainWindow : Window
             InitTray();
             coreVersion = await core.VerifyCoreAsync(lifetime.Token);
             RefreshUpdateUI();
-            label.Text = "准备好了。选择网络，填写账号和密码，然后点击“连接”。";
+            label.Text = "填写校园账号，连接校园网络。";
             loginButton.IsEnabled = true;
             if (current is { Password.Length: > 0 } && config.Auto) await StartCoreAsync();
         }
         catch (OperationCanceledException) when (lifetime.IsCancellationRequested) { }
         catch (Exception error)
         {
-            label.Text = error.Message;
-            if (!closing) await MessageAsync(error.Message + "\n配置路径：" + store.FilePath, "初始化失败");
+            ReportConnectionFailure("准备连接失败，请打开诊断检查环境。", error.Message);
         }
     }
 
@@ -412,10 +345,11 @@ public sealed partial class MainWindow : Window
             sessionTask = core.RunAsync(options, ReceiveLine, ReceiveLine, authentication.Token,
                 state => ReceiveStatus(state, options.Mode, options.NoUdp, generation));
             int code = await sessionTask;
-            label.Text = $"核心程序已退出（代码 {code}）。可使用“环境自检”查看环境。";
+            if (code == 0) label.Text = "连接已结束，可重新连接。";
+            else ReportConnectionFailure("连接失败，请检查网络或查看诊断。", $"认证程序已退出（代码 {code}）。");
         }
         catch (OperationCanceledException) when (authentication.IsCancellationRequested) { label.Text = "已停止。"; }
-        catch (Exception error) { label.Text = error.Message; ShowAndActivate(); }
+        catch (Exception error) { ReportConnectionFailure("连接失败，请检查网络或查看诊断。", error.Message); ShowAndActivate(); }
         finally
         {
             sessionTask = null;
@@ -548,7 +482,8 @@ public sealed partial class MainWindow : Window
     private void RefreshUpdateUI()
     {
         if (closing) return;
-        Title = $"drcom4scutGUI {GuiVersion}" + (coreVersion.Length == 0 ? "" : $" — {coreVersion}");
+        Title = "校园连接";
+        versionDetails.Text = $"界面 {GuiVersion}  ·  " + (coreVersion.Length == 0 ? "认证程序待检查" : coreVersion);
         bool guiAvailable = updates.Offers.TryGetValue(UpdateComponent.Gui, out UpdateOffer? guiOffer);
         bool coreAvailable = updates.Offers.TryGetValue(UpdateComponent.Core, out UpdateOffer? coreOffer);
         guiUpdateNotice.IsVisible = guiAvailable;
@@ -581,7 +516,7 @@ public sealed partial class MainWindow : Window
         }
     }
 
-    private void SetUIEnabled(bool enabled)
+    internal void SetUIEnabled(bool enabled)
     {
         loginButton.Content = enabled ? "连接" : "断开";
         macComboBox.IsEnabled = enabled;
@@ -591,8 +526,17 @@ public sealed partial class MainWindow : Window
         ipTextBox.IsEnabled = enabled;
         autoCheckBox.IsEnabled = enabled;
         modeComboBox.IsEnabled = enabled;
+        wiredModeButton.IsEnabled = enabled;
+        wirelessModeButton.IsEnabled = enabled;
         portalPanel.IsEnabled = enabled;
         deleteButton.IsEnabled = enabled && current is not null;
+    }
+
+    internal void ReportConnectionFailure(string summary, string details)
+    {
+        diagnostics.Add(details, nameComboBox.Text ?? "", passwordTextBox.Text ?? "");
+        logTextBox.Text = diagnostics.Export();
+        label.Text = summary;
     }
 
     private async Task DoctorAsync()
@@ -633,7 +577,14 @@ public sealed partial class MainWindow : Window
         catch (Exception error) { await MessageAsync(error.Message, "导出失败"); }
     }
 
-    private void UpdateModeUI() => portalPanel.IsVisible = (modeComboBox.SelectedItem as Choice)?.Value == "portal";
+    private void UpdateModeUI()
+    {
+        bool portal = (modeComboBox.SelectedItem as Choice)?.Value == "portal";
+        portalPanel.IsVisible = portal;
+        advancedPortalSettings.IsVisible = portal;
+        wiredModeButton.IsChecked = !portal;
+        wirelessModeButton.IsChecked = portal;
+    }
 
     private void SavePreferences()
     {

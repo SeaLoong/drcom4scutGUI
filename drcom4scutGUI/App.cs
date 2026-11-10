@@ -2,6 +2,7 @@ using System;
 using System.IO;
 using Avalonia;
 using Avalonia.Controls.ApplicationLifetimes;
+using Avalonia.Media;
 using Avalonia.Styling;
 using Avalonia.Themes.Fluent;
 using Avalonia.Threading;
@@ -14,8 +15,10 @@ public sealed class App : Application
 
     public override void Initialize()
     {
-        Styles.Add(new FluentTheme());
-        RequestedThemeVariant = ThemeVariant.Default;
+        FluentTheme theme = new();
+        theme.Palettes[ThemeVariant.Light] = new ColorPaletteResources { Accent = Color.Parse("#356B57") };
+        Styles.Add(theme);
+        RequestedThemeVariant = ThemeVariant.Light;
     }
 
     public override void OnFrameworkInitializationCompleted()
