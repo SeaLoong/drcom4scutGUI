@@ -31,6 +31,52 @@ public sealed class MainWindowTests
     }
 
     [Fact]
+    public Task ReopeningWindowKeepsTheOnlineStatus() => OnUi(() =>
+    {
+        MainWindow window = new(skipBackend: true);
+        window.Show();
+        try
+        {
+            window.ApplyConnectionStatus(new(CoreConnectionPhase.Online), "eap", false);
+            window.Hide();
+            window.Show();
+            Dispatcher.UIThread.RunJobs();
+            Assert.Equal("已连接校园网", Find<TextBlock>(window, "statusHeading").Text);
+        }
+        finally { window.Close(); }
+    });
+
+    [Fact]
+    public Task LongDiagnosticReportScrollsWhileCloseRemainsInView() => OnUi(() =>
+    {
+        MainWindow owner = new(skipBackend: true);
+        owner.Show();
+        try
+        {
+            string report = string.Join('\n', Enumerable.Range(1, 100).Select(i => $"自检项目 {i}：检查结果"));
+            Task completion = owner.MessageAsync(report, "环境自检");
+            Dispatcher.UIThread.RunJobs();
+            Window dialog = Assert.Single(owner.OwnedWindows);
+            try
+            {
+                ScrollViewer scroll = Assert.Single(dialog.GetLogicalDescendants().OfType<ScrollViewer>());
+                Button close = Assert.Single(dialog.GetLogicalDescendants().OfType<Button>());
+                Assert.True(scroll.Viewport.Height > 0);
+                Assert.True(scroll.Extent.Height > scroll.Viewport.Height);
+                Assert.True(dialog.ClientSize.Height <= dialog.MaxHeight + 1);
+                Point? bottom = close.TranslatePoint(new Point(0, close.Bounds.Height), dialog);
+                Assert.NotNull(bottom);
+                Assert.InRange(bottom.Value.Y, 0, dialog.ClientSize.Height);
+                close.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+                Dispatcher.UIThread.RunJobs();
+                Assert.True(completion.IsCompletedSuccessfully);
+            }
+            finally { if (dialog.IsVisible) dialog.Close(); }
+        }
+        finally { owner.Close(); }
+    });
+
+    [Fact]
     public Task MoreMenuRevealsDiagnosticsAndReturnsToTheUnclutteredConnectionView() => OnUi(() =>
     {
         MainWindow window = new(skipBackend: true);

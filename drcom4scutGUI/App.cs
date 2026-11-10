@@ -16,7 +16,7 @@ public sealed class App : Application
     public override void Initialize()
     {
         FluentTheme theme = new();
-        theme.Palettes[ThemeVariant.Light] = new ColorPaletteResources { Accent = Color.Parse("#356B57") };
+        theme.Palettes[ThemeVariant.Light] = new ColorPaletteResources { Accent = Color.Parse("#185685") };
         Styles.Add(theme);
         RequestedThemeVariant = ThemeVariant.Light;
     }

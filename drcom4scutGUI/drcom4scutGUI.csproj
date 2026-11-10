@@ -14,5 +14,6 @@
     <PackageReference Include="Avalonia.Themes.Fluent" Version="12.1.4" />
     <ProjectReference Include="../drcom4scutGUI.Core/drcom4scutGUI.Core.csproj" />
     <AvaloniaResource Include="DrClient.ico" />
+    <AvaloniaResource Include="Assets/scut-brand.png" />
   </ItemGroup>
 </Project>

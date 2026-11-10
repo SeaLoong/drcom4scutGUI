@@ -8,26 +8,28 @@ using Avalonia.Controls.Shapes;
 using Avalonia.Layout;
 using Avalonia.Media;
 using Avalonia.Media.Immutable;
+using Avalonia.Media.Imaging;
+using Avalonia.Platform;
 using Avalonia.Styling;
 
 namespace drcom4scutGUI;
 
 public sealed partial class MainWindow
 {
-    private static readonly IBrush Ink = Brush("#23372F");
-    private static readonly IBrush Muted = Brush("#6C7972");
-    private static readonly IBrush Accent = Brush("#356B57");
-    private static readonly IBrush Line = Brush("#DAE1D9");
+    private static readonly IBrush Ink = Brush("#16334D");
+    private static readonly IBrush Muted = Brush("#52677B");
+    private static readonly IBrush Accent = Brush("#185685");
+    private static readonly IBrush Line = Brush("#D7E2ED");
     private readonly TextBlock statusHeading = new() { Name = "statusHeading", Text = "连接校园网", FontSize = 30, FontWeight = FontWeight.SemiBold, Foreground = Ink };
     private readonly TextBlock statusCaption = new() { Name = "statusCaption", Text = "尚未连接", FontSize = 12, Foreground = Muted };
-    private readonly Ellipse statusDot = new() { Width = 7, Height = 7, Fill = Brush("#91A096") };
+    private readonly Ellipse statusDot = new() { Width = 7, Height = 7, Fill = Brush("#8297AC") };
     private readonly ProgressBar connectionProgress = new() { Name = "connectionProgress", IsIndeterminate = true, Height = 3, IsVisible = false };
     private readonly ToggleButton wiredModeButton = new() { Name = "wiredModeButton", Content = "有线网络", IsChecked = true };
     private readonly ToggleButton wirelessModeButton = new() { Name = "wirelessModeButton", Content = "校园 Wi-Fi" };
     private readonly Button moreButton = new() { Name = "moreButton", Content = "更多  ···" };
     private readonly Button diagnosticsLink = new() { Name = "diagnosticsLink", Content = "连接遇到问题？", FontSize = 11 };
     private readonly StackPanel connectionPanel = new() { Name = "connectionPanel" };
-    private readonly Border extraPanel = new() { Name = "extraPanel", IsVisible = false, CornerRadius = new CornerRadius(14), Background = Brush("#EDF1EB"), Padding = new Thickness(20) };
+    private readonly Border extraPanel = new() { Name = "extraPanel", IsVisible = false, CornerRadius = new CornerRadius(14), Background = Brush("#EDF4FB"), Padding = new Thickness(20) };
     private readonly StackPanel settingsView = new() { Name = "settingsView", Spacing = 18, IsVisible = false };
     private readonly StackPanel diagnosticsView = new() { Name = "diagnosticsView", Spacing = 14, IsVisible = false };
     private readonly StackPanel updatesView = new() { Name = "updatesView", Spacing = 14, IsVisible = false };
@@ -41,7 +43,7 @@ public sealed partial class MainWindow
 
     private void BuildContent()
     {
-        Background = Brush("#F7F8F4");
+        Background = Brush("#F7FAFD");
         Foreground = Ink;
         FontFamily = new FontFamily(OperatingSystem.IsWindows() ? "Microsoft YaHei UI"
             : OperatingSystem.IsMacOS() ? "PingFang SC" : "Noto Sans CJK SC");
@@ -49,28 +51,30 @@ public sealed partial class MainWindow
         ApplyDesktopStyles();
 
         Grid shell = new() { RowDefinitions = new RowDefinitions("Auto,*,Auto,Auto") };
-        Grid header = new() { ColumnDefinitions = new ColumnDefinitions("Auto,*,Auto"), Margin = new Thickness(30, 25, 26, 0), ColumnSpacing = 11 };
-        header.Children.Add(new Border
+        Grid header = new() { ColumnDefinitions = new ColumnDefinitions("*,Auto"), Margin = new Thickness(30, 12, 26, 12), ColumnSpacing = 12 };
+        using var brandStream = AssetLoader.Open(new Uri("avares://drcom4scutGUI/Assets/scut-brand.png"));
+        Bitmap brandBitmap = new(brandStream);
+        Closed += (_, _) => brandBitmap.Dispose();
+        Image brand = new()
         {
-            Width = 34, Height = 34, CornerRadius = new CornerRadius(10), Background = Ink,
-            Child = NetworkSymbol(20, Brush("#F7F8F4"))
-        });
-        StackPanel brand = new() { Spacing = 1, VerticalAlignment = VerticalAlignment.Center };
-        brand.Children.Add(new TextBlock { Text = "校园连接", FontSize = 15, FontWeight = FontWeight.SemiBold });
-        brand.Children.Add(new TextBlock { Text = skipBackend ? "界面预览 · 不会发起连接" : "SCUT NETWORK", FontSize = 9, LetterSpacing = skipBackend ? 0 : 1.5, Foreground = Muted });
-        Grid.SetColumn(brand, 1);
+            Source = new CroppedBitmap(brandBitmap, new PixelRect(20, 194, 686, 167)),
+            Height = 62,
+            Stretch = Stretch.Uniform,
+            HorizontalAlignment = HorizontalAlignment.Left
+        };
+        AutomationProperties.SetName(brand, "华南理工大学校徽与校名");
         header.Children.Add(brand);
         moreButton.Classes.Add("quiet");
         moreButton.VerticalAlignment = VerticalAlignment.Center;
         AutomationProperties.SetName(moreButton, "更多选项：连接设置、诊断与日志、软件更新");
-        Grid.SetColumn(moreButton, 2);
+        Grid.SetColumn(moreButton, 1);
         header.Children.Add(moreButton);
         ConfigureMoreMenu();
-        shell.Children.Add(header);
+        shell.Children.Add(new Border { Background = Brushes.White, BorderBrush = Line, BorderThickness = new Thickness(0, 0, 0, 1), Child = header });
 
-        StackPanel body = new() { Margin = new Thickness(30, 27, 30, 20), Spacing = 0 };
+        StackPanel body = new() { Margin = new Thickness(30, 20, 30, 20), Spacing = 0 };
         body.Children.Add(connectionPanel);
-        Grid hero = new() { ColumnDefinitions = new ColumnDefinitions("*,96"), MinHeight = 113, Margin = new Thickness(0, 0, 0, 22) };
+        Grid hero = new() { ColumnDefinitions = new ColumnDefinitions("*,96"), MinHeight = 96, Margin = new Thickness(0, 0, 0, 22) };
         StackPanel status = new() { Spacing = 10, VerticalAlignment = VerticalAlignment.Center };
         StackPanel statusLine = new() { Orientation = Orientation.Horizontal, Spacing = 7, VerticalAlignment = VerticalAlignment.Center };
         statusLine.Children.Add(statusDot);
@@ -81,7 +85,7 @@ public sealed partial class MainWindow
         Border symbol = new()
         {
             Width = 88, Height = 88, CornerRadius = new CornerRadius(30),
-            Background = Brush("#E6EDE3"), Child = NetworkSymbol(47, Accent), VerticalAlignment = VerticalAlignment.Center
+            Background = Brush("#E6F0FA"), Child = NetworkSymbol(47, Accent), VerticalAlignment = VerticalAlignment.Center
         };
         Grid.SetColumn(symbol, 1);
         hero.Children.Add(symbol);
@@ -96,15 +100,15 @@ public sealed partial class MainWindow
             button.MinHeight = 43;
             button.Resources["ToggleButtonBackgroundChecked"] = Brushes.White;
             button.Resources["ToggleButtonForegroundChecked"] = Ink;
-            button.Resources["ToggleButtonBackgroundCheckedPointerOver"] = Brush("#F7F9F4");
+            button.Resources["ToggleButtonBackgroundCheckedPointerOver"] = Brush("#F6FAFF");
             button.Resources["ToggleButtonForegroundCheckedPointerOver"] = Ink;
-            button.Resources["ToggleButtonBackgroundCheckedPressed"] = Brush("#E3EAE0");
+            button.Resources["ToggleButtonBackgroundCheckedPressed"] = Brush("#DDEBFA");
             button.Resources["ToggleButtonForegroundCheckedPressed"] = Ink;
         }
         modes.Children.Add(wiredModeButton);
         Grid.SetColumn(wirelessModeButton, 1);
         modes.Children.Add(wirelessModeButton);
-        connectionPanel.Children.Add(new Border { Background = Brush("#EAEFE7"), CornerRadius = new CornerRadius(12), Padding = new Thickness(5), Child = modes, Margin = new Thickness(0, 0, 0, 24) });
+        connectionPanel.Children.Add(new Border { Background = Brush("#E8F0F8"), CornerRadius = new CornerRadius(12), Padding = new Thickness(5), Child = modes, Margin = new Thickness(0, 0, 0, 24) });
         wiredModeButton.Click += (_, _) =>
         {
             if (modeComboBox.SelectedIndex == 2) modeComboBox.SelectedIndex = 0;
@@ -159,7 +163,8 @@ public sealed partial class MainWindow
         shell.Children.Add(updatePanel);
 
         Grid footer = new() { ColumnDefinitions = new ColumnDefinitions("*,Auto"), Margin = new Thickness(30, 0, 30, 20) };
-        footer.Children.Add(new TextBlock { Text = "华南理工大学 · 校园网络", FontSize = 11, Foreground = Muted, VerticalAlignment = VerticalAlignment.Center });
+        if (skipBackend)
+            footer.Children.Add(new TextBlock { Text = "界面预览 · 不会发起连接", FontSize = 11, Foreground = Muted, VerticalAlignment = VerticalAlignment.Center });
         diagnosticsLink.Classes.Add("quiet");
         diagnosticsLink.Click += (_, _) => { if (extraPanel.IsVisible) HideExtraView(); else ShowExtraView("diagnostics"); };
         Grid.SetColumn(diagnosticsLink, 1);
@@ -246,7 +251,7 @@ public sealed partial class MainWindow
         logTextBox.Height = 210;
         logTextBox.FontFamily = new FontFamily("Cascadia Mono, Consolas, monospace");
         logTextBox.FontSize = 11;
-        logTextBox.Background = Brush("#F7F8F4");
+        logTextBox.Background = Brush("#F7FAFD");
         logTextBox.PlaceholderText = "连接后，详细日志会显示在这里。";
         diagnosticsView.Children.Add(logTextBox);
 
@@ -291,7 +296,7 @@ public sealed partial class MainWindow
         statusHeading.Text = online ? "已连接校园网" : recovering ? "正在恢复连接" : waiting ? "等待网络就绪"
             : stopping ? "正在断开连接" : busy ? "正在连接校园网" : failed ? "连接需要检查" : "连接校园网";
         statusCaption.Text = online ? "连接已建立" : stopping ? "正在停止" : recovering ? "自动重试中" : busy ? "连接中" : failed ? "需要处理" : "尚未连接";
-        statusDot.Fill = online ? Accent : busy || stopping ? Brush("#AB8652") : failed ? Brush("#A96051") : Brush("#91A096");
+        statusDot.Fill = online ? Accent : busy || stopping ? Brush("#4184B9") : failed ? Brush("#A96051") : Brush("#8297AC");
         connectionProgress.IsVisible = busy || stopping;
         extraStatus.Text = "连接状态：" + statusCaption.Text;
     }
@@ -336,8 +341,8 @@ public sealed partial class MainWindow
         {
             Setters = { new Setter(TemplatedControl.CornerRadiusProperty, new CornerRadius(8)), new Setter(TemplatedControl.PaddingProperty, new Thickness(12, 9)), new Setter(TemplatedControl.FontWeightProperty, FontWeight.Medium), new Setter(TemplatedControl.BackgroundProperty, Brushes.White), new Setter(TemplatedControl.BorderBrushProperty, Line), new Setter(TemplatedControl.ForegroundProperty, Ink) }
         });
-        Resources["ButtonBackgroundPointerOver"] = Brush("#E7EEE5");
-        Resources["ButtonBackgroundPressed"] = Brush("#DCE6D9");
+        Resources["ButtonBackgroundPointerOver"] = Brush("#E7F1FC");
+        Resources["ButtonBackgroundPressed"] = Brush("#D8E9FA");
         Resources["ButtonForegroundPointerOver"] = Ink;
         Resources["ButtonForegroundPressed"] = Ink;
         Styles.Add(new Style(s => s.OfType<Button>().Class("quiet"))
@@ -358,8 +363,8 @@ public sealed partial class MainWindow
         });
         foreach (Button button in new[] { loginButton, moreButton, doctorButton, checkUpdateButton, checkCoreUpdateButton })
             button.Transitions = new Transitions { new BrushTransition { Property = TemplatedControl.BackgroundProperty, Duration = TimeSpan.FromMilliseconds(160) } };
-        loginButton.Resources["ButtonBackgroundPointerOver"] = Brush("#2B5B49");
-        loginButton.Resources["ButtonBackgroundPressed"] = Brush("#244D3F");
+        loginButton.Resources["ButtonBackgroundPointerOver"] = Brush("#134976");
+        loginButton.Resources["ButtonBackgroundPressed"] = Brush("#103B60");
         loginButton.Resources["ButtonForegroundPointerOver"] = Brushes.White;
         loginButton.Resources["ButtonForegroundPressed"] = Brushes.White;
     }

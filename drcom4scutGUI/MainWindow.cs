@@ -122,9 +122,15 @@ public sealed partial class MainWindow : Window
         checkCoreUpdateButton.Click += async (_, _) => await updates.CheckAsync(UpdateComponent.Core, manual: true);
         guiUpdateNotice.Click += async (_, _) => await updates.InstallAsync(UpdateComponent.Gui);
         coreUpdateNotice.Click += async (_, _) => await updates.InstallAsync(UpdateComponent.Core);
-        Opened += async (_, _) => await InitializeAsync();
+        Opened += InitializeOnFirstOpen;
         Closing += WindowClosing;
         if (skipBackend) InitUI();
+    }
+
+    private async void InitializeOnFirstOpen(object? sender, EventArgs args)
+    {
+        Opened -= InitializeOnFirstOpen;
+        await InitializeAsync();
     }
 
     private async Task InitializeAsync()
@@ -604,17 +610,30 @@ public sealed partial class MainWindow : Window
         }
     }
 
-    private async Task MessageAsync(string message, string title) => await DialogAsync(message, title, confirm: false);
+    internal async Task MessageAsync(string message, string title) => await DialogAsync(message, title, confirm: false);
     private Task<bool> ConfirmAsync(string message, string title) => DialogAsync(message, title, confirm: true);
 
     private async Task<bool> DialogAsync(string message, string title, bool confirm)
     {
         if (closing || !IsVisible) { label.Text = message; return false; }
-        Window dialog = new() { Title = title, Width = 450, SizeToContent = SizeToContent.Height, CanResize = false, WindowStartupLocation = WindowStartupLocation.CenterOwner };
-        StackPanel content = new() { Spacing = 15, Margin = new Thickness(20) };
-        content.Children.Add(new TextBlock { Text = message, TextWrapping = TextWrapping.Wrap });
+        Screen? screen = Screens.ScreenFromWindow(this) ?? Screens.Primary;
+        double maxHeight = screen is null ? 560 : Math.Min(560, screen.WorkingArea.Height / screen.Scaling - 48);
+        double width = screen is null ? 450 : Math.Min(450, screen.WorkingArea.Width / screen.Scaling - 24);
+        Window dialog = new()
+        {
+            Title = title, Width = width, MaxHeight = maxHeight, SizeToContent = SizeToContent.Height,
+            CanResize = false, WindowStartupLocation = WindowStartupLocation.CenterOwner
+        };
+        Grid content = new() { RowDefinitions = new RowDefinitions("*,Auto"), RowSpacing = 15, Margin = new Thickness(20) };
+        content.Children.Add(new ScrollViewer
+        {
+            MaxHeight = Math.Max(32, maxHeight - 100),
+            HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
+            VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+            Content = new TextBlock { Text = message, TextWrapping = TextWrapping.Wrap }
+        });
         StackPanel actions = new() { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right, Spacing = 8 };
-        Button ok = new() { Content = confirm ? "确定" : "关闭", IsDefault = true };
+        Button ok = new() { Content = confirm ? "确定" : "关闭", IsDefault = true, IsCancel = !confirm };
         ok.Click += (_, _) => dialog.Close(true);
         actions.Children.Add(ok);
         if (confirm)
@@ -623,6 +642,7 @@ public sealed partial class MainWindow : Window
             cancel.Click += (_, _) => dialog.Close(false);
             actions.Children.Add(cancel);
         }
+        Grid.SetRow(actions, 1);
         content.Children.Add(actions);
         dialog.Content = content;
         return await dialog.ShowDialog<bool>(this);
