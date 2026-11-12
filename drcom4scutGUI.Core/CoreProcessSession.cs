@@ -21,6 +21,9 @@ public sealed record CoreLaunchOptions(string Username, [property: JsonIgnore] s
 /// <summary>A completed environment check can report unmet prerequisites.</summary>
 public sealed record CoreDoctorReport(string Report, bool PrerequisitesMet);
 
+/// <summary>A core process could not start or complete an environment probe.</summary>
+public sealed class CoreProbeException(string message) : InvalidOperationException(message);
+
 /// <summary>
 /// Owns one child only. Passwords travel through its private redirected stdin,
 /// never through the process argument vector or environment variables.
@@ -180,9 +183,9 @@ public sealed class CoreProcessSession(string executable)
         return reported;
     }
 
-    public async Task<CoreDoctorReport> DoctorAsync(CancellationToken cancellationToken)
+    public async Task<CoreDoctorReport> DoctorAsync(CancellationToken cancellationToken, CoreLaunchOptions? options = null)
     {
-        ProbeResult result = await ProbeAsync("--doctor", cancellationToken).ConfigureAwait(false);
+        ProbeResult result = await ProbeAsync("--doctor", cancellationToken, options).ConfigureAwait(false);
         string report = result.Output.TrimEnd();
         if (result.Error.Length > 0)
             report += (report.Length > 0 ? Environment.NewLine : "") + result.Error.TrimEnd();
@@ -191,12 +194,19 @@ public sealed class CoreProcessSession(string executable)
 
     private sealed record ProbeResult(int ExitCode, string Output, string Error);
 
-    private async Task<ProbeResult> ProbeAsync(string argument, CancellationToken cancellationToken)
+    private async Task<ProbeResult> ProbeAsync(string argument, CancellationToken cancellationToken, CoreLaunchOptions? options = null)
     {
         using CancellationTokenSource deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         deadline.CancelAfter(TimeSpan.FromSeconds(10));
         using Process process = new() { StartInfo = CreateBaseStartInfo(executable) };
         process.StartInfo.ArgumentList.Add(argument);
+        if (argument == "--doctor" && options is not null)
+        {
+            // Check the selected adapter without passing account data or reading
+            // its authentication configuration. Auto-selection may pick another NIC.
+            AddOption(process.StartInfo, "--mac", options.Mac);
+            AddOption(process.StartInfo, "--ip", options.IP);
+        }
         Start(process);
         using CancellationTokenRegistration registration = deadline.Token.Register(() => KillOwned(process));
         Task<string> output = CoreOutputReader.ReadProbeAsync(process.StandardOutput, deadline.Token);
@@ -216,8 +226,14 @@ public sealed class CoreProcessSession(string executable)
             string text = await output.ConfigureAwait(false);
             string errors = await error.ConfigureAwait(false);
             if (process.ExitCode != 0 && !(argument == "--doctor" && process.ExitCode == 1))
-                throw new InvalidOperationException("核心自检未成功，请检查版本和网卡权限；Windows 有线模式还需要 Npcap。" + (argument == "--doctor" ? "\n" + errors : ""));
+                throw new CoreProbeException($"核心检查 {argument} 失败（退出代码 0x{process.ExitCode:X8}）。请查看下方输出；此错误不一定是缺少 Npcap。"
+                    + (text.Length > 0 ? "\n" + text.TrimEnd() : "")
+                    + (errors.Length > 0 ? "\n" + errors.TrimEnd() : ""));
             return new ProbeResult(process.ExitCode, text, errors);
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested && deadline.IsCancellationRequested)
+        {
+            throw new TimeoutException($"核心检查 {argument} 超时，系统或驱动可能尚未就绪。");
         }
         finally
         {
@@ -253,9 +269,9 @@ public sealed class CoreProcessSession(string executable)
         {
             if (!process.Start()) throw new InvalidOperationException("无法启动核心程序。");
         }
-        catch (Win32Exception)
+        catch (Win32Exception error)
         {
-            throw new InvalidOperationException("无法启动安装目录中的 drcom4scut 核心。请安装对应系统和 CPU 的 0.5.0 或更新版本，并检查文件执行权限；Windows 有线模式还需要 Npcap。");
+            throw new CoreProbeException($"无法启动安装目录中的 drcom4scut 核心（系统错误 {error.NativeErrorCode}：{error.Message}）。请检查核心文件、系统架构和执行权限。");
         }
     }
 

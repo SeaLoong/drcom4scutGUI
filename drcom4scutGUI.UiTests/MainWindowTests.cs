@@ -1,6 +1,8 @@
 using Avalonia;
 using Avalonia.Controls;
+using Avalonia.Controls.Primitives;
 using Avalonia.Headless;
+using Avalonia.Interactivity;
 using Avalonia.LogicalTree;
 using Avalonia.Threading;
 using System.Xml.Linq;
@@ -10,13 +12,14 @@ namespace drcom4scutGUI.UiTests;
 
 public static class TestAppBuilder
 {
-    public static AppBuilder BuildAvaloniaApp() => AppBuilder.Configure<App>().UseHeadless(new AvaloniaHeadlessPlatformOptions()).WithInterFont();
+    public static AppBuilder BuildAvaloniaApp() => AppBuilder.Configure<App>().UseSkia()
+        .UseHeadless(new AvaloniaHeadlessPlatformOptions { UseHeadlessDrawing = false }).WithInterFont();
 }
 
 [Collection("Avalonia UI")]
 public sealed class MainWindowTests
 {
-    private static T Find<T>(MainWindow window, string name) where T : Control =>
+    private static T Find<T>(Control window, string name) where T : Control =>
         window.GetLogicalDescendants().OfType<T>().Single(control => control.Name == name);
 
     private static async Task OnUi(Action action)
@@ -26,6 +29,190 @@ public sealed class MainWindowTests
         await using HeadlessUnitTestSession session = HeadlessUnitTestSession.StartNew(typeof(TestAppBuilder));
         await session.Dispatch(action, TestContext.Current.CancellationToken);
     }
+
+    [Fact]
+    public Task ClosingToTrayPreservesStatusAndDoesNotReopenOnRecovery() => OnUi(() =>
+    {
+        MainWindow window = new(skipBackend: true) { CanHideToTray = true };
+        bool closed = false;
+        window.Closed += (_, _) => closed = true;
+        window.Show();
+        try
+        {
+            window.ApplyConnectionStatus(new(CoreConnectionPhase.Online), "eap", false);
+            window.Show();
+            window.Close();
+            Assert.False(closed);
+            Assert.False(window.IsVisible);
+            Assert.Equal("已连接校园网", Find<TextBlock>(window, "statusHeading").Text);
+            window.ApplyConnectionStatus(new(CoreConnectionPhase.WaitingInterface), "eap", false);
+            Assert.False(window.IsVisible);
+            window.Show();
+            Assert.True(window.IsVisible);
+            window.RequestExit();
+            Assert.True(closed);
+        }
+        finally { if (!closed) window.RequestExit(); }
+    });
+
+    [Fact]
+    public Task ReopeningWindowKeepsTheOnlineStatus() => OnUi(() =>
+    {
+        MainWindow window = new(skipBackend: true);
+        window.Show();
+        try
+        {
+            window.ApplyConnectionStatus(new(CoreConnectionPhase.Online), "eap", false);
+            window.Hide();
+            window.Show();
+            Dispatcher.UIThread.RunJobs();
+            Assert.Equal("已连接校园网", Find<TextBlock>(window, "statusHeading").Text);
+        }
+        finally { window.Close(); }
+    });
+
+    [Fact]
+    public Task LongDiagnosticReportScrollsWhileCloseRemainsInView() => OnUi(() =>
+    {
+        MainWindow owner = new(skipBackend: true);
+        owner.Show();
+        try
+        {
+            string report = string.Join('\n', Enumerable.Range(1, 100).Select(i => $"自检项目 {i}：检查结果"));
+            Task completion = owner.MessageAsync(report, "环境自检");
+            Dispatcher.UIThread.RunJobs();
+            Window dialog = Assert.Single(owner.OwnedWindows);
+            try
+            {
+                ScrollViewer scroll = Assert.Single(dialog.GetLogicalDescendants().OfType<ScrollViewer>());
+                Button close = Assert.Single(dialog.GetLogicalDescendants().OfType<Button>());
+                Assert.True(scroll.Viewport.Height > 0);
+                Assert.True(scroll.Extent.Height > scroll.Viewport.Height);
+                Assert.True(dialog.ClientSize.Height <= dialog.MaxHeight + 1);
+                Point? bottom = close.TranslatePoint(new Point(0, close.Bounds.Height), dialog);
+                Assert.NotNull(bottom);
+                Assert.InRange(bottom.Value.Y, 0, dialog.ClientSize.Height);
+                close.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+                Dispatcher.UIThread.RunJobs();
+                Assert.True(completion.IsCompletedSuccessfully);
+            }
+            finally { if (dialog.IsVisible) dialog.Close(); }
+        }
+        finally { owner.Close(); }
+    });
+
+    [Fact]
+    public Task MoreMenuRevealsDiagnosticsAndReturnsToTheUnclutteredConnectionView() => OnUi(() =>
+    {
+        MainWindow window = new(skipBackend: true);
+        window.Show();
+        try
+        {
+            Border panel = Find<Border>(window, "extraPanel");
+            Assert.False(panel.IsVisible);
+            Assert.False(Find<StackPanel>(window, "diagnosticsView").IsVisible);
+            Assert.False(Find<StackPanel>(window, "settingsView").IsVisible);
+            Button more = Find<Button>(window, "moreButton");
+            Flyout menu = Assert.IsType<Flyout>(more.Flyout);
+            menu.ShowAt(more);
+            Dispatcher.UIThread.RunJobs();
+            Find<Button>(Assert.IsAssignableFrom<Control>(menu.Content), "diagnosticsMenuButton")
+                .RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+            Dispatcher.UIThread.RunJobs();
+            Assert.True(panel.IsVisible);
+            Assert.True(Find<StackPanel>(window, "diagnosticsView").IsVisible);
+            Assert.False(Find<StackPanel>(window, "connectionPanel").IsVisible);
+            Assert.False(Find<StackPanel>(window, "settingsView").IsVisible);
+            Assert.NotNull(Find<Button>(window, "doctorButton"));
+            Assert.NotNull(Find<Button>(window, "exportButton"));
+            window.ReceiveLine("retained diagnostic entry");
+            Dispatcher.UIThread.RunJobs();
+            Find<Button>(window, "closeExtraButton").RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+            Assert.False(panel.IsVisible);
+            window.ShowExtraView("diagnostics");
+            Assert.Contains("retained diagnostic entry", Find<TextBox>(window, "logTextBox").Text);
+            Find<Button>(window, "diagnosticsLink").RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+            Assert.False(panel.IsVisible);
+            Assert.True(Find<StackPanel>(window, "connectionPanel").IsVisible);
+        }
+        finally { window.Close(); }
+    });
+
+    [Fact]
+    public Task NetworkButtonsPreserveTheAdvancedWiredModeUntilSwitchingNetworks() => OnUi(() =>
+    {
+        Configuration configuration = new() { Mode = "eap", NoUdp = true };
+        MainWindow window = new(skipBackend: true, initialConfiguration: configuration);
+        window.Show();
+        try
+        {
+            ToggleButton wired = Find<ToggleButton>(window, "wiredModeButton");
+            ToggleButton wireless = Find<ToggleButton>(window, "wirelessModeButton");
+            Assert.True(wired.IsChecked);
+            wired.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+            Assert.True(configuration.NoUdp);
+            wireless.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+            Assert.Equal("portal", configuration.Mode);
+            Assert.False(configuration.NoUdp);
+            Assert.True(wireless.IsChecked);
+            Assert.True(Find<StackPanel>(window, "portalPanel").IsVisible);
+            wired.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+            Assert.Equal("eap", configuration.Mode);
+            Assert.False(configuration.NoUdp);
+            Assert.True(wired.IsChecked);
+            Assert.False(Find<StackPanel>(window, "portalPanel").IsVisible);
+        }
+        finally { window.Close(); }
+    });
+
+    [Fact]
+    public Task ConnectionCardShowsAuthenticationRecoveryAndOnlineStatesWithoutInventedMetrics() => OnUi(() =>
+    {
+        MainWindow window = new(skipBackend: true);
+        window.Show();
+        try
+        {
+            TextBlock heading = Find<TextBlock>(window, "statusHeading");
+            TextBlock caption = Find<TextBlock>(window, "statusCaption");
+            window.ApplyConnectionStatus(new(CoreConnectionPhase.UdpAuthentication), "eap", false);
+            Assert.Equal("正在连接校园网", heading.Text);
+            Assert.Equal("连接中", caption.Text);
+            window.ApplyConnectionStatus(new(CoreConnectionPhase.Online), "eap", false);
+            Assert.Equal("已连接校园网", heading.Text);
+            Assert.Equal("连接已建立", caption.Text);
+            window.ApplyConnectionStatus(new(CoreConnectionPhase.Offline), "eap", false);
+            Assert.Equal("正在恢复连接", heading.Text);
+            Assert.Equal("自动重试中", caption.Text);
+            Assert.False(Find<Border>(window, "extraPanel").IsVisible);
+        }
+        finally { window.Close(); }
+    });
+
+    [Fact]
+    public Task ConnectionErrorsKeepTechnicalDetailsInDiagnosticsAndRedactBothCredentials() => OnUi(() =>
+    {
+        Configuration configuration = new()
+        {
+            Accounts = [new Account { Name = "synthetic-student", Password = "synthetic-password" }],
+            Account = "synthetic-student"
+        };
+        MainWindow window = new(skipBackend: true, initialConfiguration: configuration);
+        window.Show();
+        try
+        {
+            const string summary = "连接失败，请检查网络或查看诊断。";
+            window.ReportConnectionFailure(summary, "Cannot launch core for synthetic-student with synthetic-password at C:/example/core.exe");
+            Assert.Equal(summary, Find<TextBlock>(window, "statusLabel").Text);
+            Assert.False(Find<Border>(window, "extraPanel").IsVisible);
+            window.ShowExtraView("diagnostics");
+            string? details = Find<TextBox>(window, "logTextBox").Text;
+            Assert.Contains("Cannot launch core", details);
+            Assert.Contains("C:/example/core.exe", details);
+            Assert.DoesNotContain("synthetic-student", details);
+            Assert.DoesNotContain("synthetic-password", details);
+        }
+        finally { window.Close(); }
+    });
 
     [Fact]
     public void PerUserInstanceLockExcludesAnotherInstanceAndReleasesForRestart()
@@ -208,10 +395,36 @@ public sealed class MainWindowTests
             window.ReceiveLine("连接失败：请检查网线。");
             Dispatcher.UIThread.RunJobs();
             TextBox log = Find<TextBox>(window, "logTextBox");
+            Assert.True(string.IsNullOrEmpty(log.Text));
+            window.ShowExtraView("diagnostics");
             Assert.EndsWith("连接失败：请检查网线。", log.Text);
             Assert.Contains("diagnostic-999", log.Text);
             Assert.Equal(200, log.Text!.Split(Environment.NewLine).Length);
             Assert.Equal(previousStatus, status.Text);
+        }
+        finally { window.Close(); }
+    });
+
+    [Fact]
+    public Task HiddenDiagnosticsKeepBufferingAndCatchUpWhenReopened() => OnUi(() =>
+    {
+        MainWindow window = new(skipBackend: true);
+        window.Show();
+        try
+        {
+            window.ShowExtraView("diagnostics");
+            window.ReceiveLine("before-hide");
+            Dispatcher.UIThread.RunJobs();
+            TextBox log = Find<TextBox>(window, "logTextBox");
+            Assert.Contains("before-hide", log.Text);
+            window.Hide();
+            for (int i = 0; i < 1000; i++) window.ReceiveLine("background-" + i);
+            Dispatcher.UIThread.RunJobs();
+            Assert.Equal("before-hide", log.Text);
+            window.Show();
+            Dispatcher.UIThread.RunJobs();
+            Assert.EndsWith("background-999", log.Text);
+            Assert.Equal(200, log.Text!.Split(Environment.NewLine).Length);
         }
         finally { window.Close(); }
     });

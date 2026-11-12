@@ -18,6 +18,14 @@ string Option(string key)
 }
 if (args is ["--help"])
 {
+    if (Path.GetFileName(Environment.ProcessPath!).StartsWith("StartupFailure", StringComparison.Ordinal)
+        && !File.Exists(Environment.ProcessPath! + ".ready"))
+    {
+        File.WriteAllText(Environment.ProcessPath! + ".ready", "ready");
+        Console.WriteLine("startup-output");
+        Console.Error.WriteLine("startup-error");
+        return 7;
+    }
     Console.WriteLine(Path.GetFileName(Environment.ProcessPath!).StartsWith("Legacy", StringComparison.Ordinal)
         ? "Legacy client --username --password" : "Client --username --password-stdin --control-pipe --control-socket --status-file --doctor --mode --portal-base --with-udp --require-https-portal");
     return 0;
@@ -32,9 +40,14 @@ if (args is ["--version"])
         : "drcom4scut 0.5.0");
     return 0;
 }
-if (args is ["--doctor"])
+if (args.Length > 0 && args[0] == "--doctor")
 {
     string fixture = Path.GetFileName(Environment.ProcessPath!);
+    if (fixture.StartsWith("DoctorSelection", StringComparison.Ordinal))
+    {
+        Console.WriteLine(JsonSerializer.Serialize(args));
+        return 0;
+    }
     if (fixture.StartsWith("DoctorOversized", StringComparison.Ordinal))
     {
         await File.WriteAllTextAsync(Environment.ProcessPath! + ".pid", Environment.ProcessId.ToString());

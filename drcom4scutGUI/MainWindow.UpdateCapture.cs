@@ -36,7 +36,7 @@ public sealed partial class MainWindow
                 throw new ArgumentException("Native screenshot capture requires three unique capture arguments.");
         }
         if (options.Count != 3 || !options.TryGetValue("--capture-update", out string? scenario)
-            || scenario is not ("idle" or "current" or "available" or "confirm")
+            || scenario is not ("idle" or "current" or "available" or "confirm" or "online" or "connecting" or "reconnecting" or "settings" or "diagnostics")
             || !options.TryGetValue("--capture-update-fixture", out string? fixture)
             || !options.TryGetValue("--capture-ready-file", out string? ready)
             || !Path.IsPathFullyQualified(fixture) || !Path.IsPathFullyQualified(ready)
@@ -72,14 +72,26 @@ public sealed partial class MainWindow
         window.Closed += (_, _) => client.Dispose();
         window.Opened += async (_, _) =>
         {
-            // Match the production window's working-area constraint. Without
-            // this, Windows' taskbar can cover the bottom of the photographed
-            // client rectangle on a hosted runner's small desktop.
-            if (window.Screens.Primary is { } screen)
-                window.MaxHeight = Math.Max(420, screen.WorkingArea.Height / screen.Scaling - 35);
             window.label.Text = "示例账号 student-demo，密码为空，未发起校园网认证。";
-            if (settings.Scenario == "idle")
+            if (settings.Scenario is "idle" or "online" or "connecting" or "reconnecting" or "settings" or "diagnostics")
             {
+                window.label.Text = "填写校园账号，连接校园网络。";
+                if (settings.Scenario is "online" or "connecting" or "reconnecting")
+                {
+                    window.SetUIEnabled(false);
+                    window.ApplyConnectionStatus(new(settings.Scenario switch
+                    {
+                        "online" => CoreConnectionPhase.Online,
+                        "connecting" => CoreConnectionPhase.UdpAuthentication,
+                        _ => CoreConnectionPhase.Offline
+                    }), settings.Configuration.Mode, settings.Configuration.NoUdp);
+                }
+                if (settings.Scenario is "settings" or "diagnostics")
+                {
+                    window.ReceiveLine("[界面预览] 此处显示认证程序的最近输出。");
+                    window.ReceiveLine("[界面预览] 未读取真实账号，未发起网络认证。");
+                    window.ShowExtraView(settings.Scenario);
+                }
                 DispatcherTimer.RunOnce(() => WriteReady(window), TimeSpan.FromMilliseconds(500));
                 return;
             }

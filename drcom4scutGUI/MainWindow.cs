@@ -37,11 +37,15 @@ public sealed partial class MainWindow : Window
     private bool loading;
     private bool closing;
     private bool closeAllowed;
+    private bool exitRequested;
+    private bool preparingCore;
+    private bool hiddenByUser;
     private bool authenticated;
-    private bool canHideToTray;
+    internal bool CanHideToTray { get; set; }
     private int sessionGeneration;
     private string coreVersion = "";
     private int logRefreshPending;
+    private int logDisplayActive;
     private static string GuiVersion => typeof(MainWindow).Assembly.GetName().Version?.ToString(3) ?? "unknown";
 
     private readonly ComboBox modeComboBox = new() { Name = "modeComboBox", HorizontalAlignment = HorizontalAlignment.Stretch };
@@ -99,14 +103,19 @@ public sealed partial class MainWindow : Window
             if (Dispatcher.UIThread.CheckAccess()) RefreshUpdateUI();
             else Dispatcher.UIThread.Post(RefreshUpdateUI);
         };
-        Title = $"drcom4scutGUI {GuiVersion}";
-        Width = 560;
-        Height = 740;
-        MinWidth = 430;
-        MinHeight = 420;
+        Title = "校园连接";
+        Width = 520;
+        Height = 720;
+        MinWidth = 440;
+        MinHeight = 520;
+        // Fit the initial window to the work area without clamping maximized layout.
+        // On Win32, a clamped layout can overwrite the native restore bounds.
+        if (Screens.Primary is { } screen)
+            Height = Math.Clamp(screen.WorkingArea.Height / screen.Scaling - 35, MinHeight, Height);
         WindowStartupLocation = WindowStartupLocation.CenterScreen;
         using (Stream stream = AssetLoader.Open(new Uri("avares://drcom4scutGUI/DrClient.ico"))) Icon = new WindowIcon(stream);
         BuildContent();
+        label.PropertyChanged += (_, change) => { if (change.Property == TextBlock.TextProperty) RefreshStatusPresentation(); };
         nameComboBox.TextChanged += (_, _) => AccountTextChanged();
         ipTextBox.TextChanged += (_, _) => ValidateIp();
         modeComboBox.SelectionChanged += (_, _) => { UpdateModeUI(); SavePreferences(); };
@@ -121,76 +130,19 @@ public sealed partial class MainWindow : Window
         checkCoreUpdateButton.Click += async (_, _) => await updates.CheckAsync(UpdateComponent.Core, manual: true);
         guiUpdateNotice.Click += async (_, _) => await updates.InstallAsync(UpdateComponent.Gui);
         coreUpdateNotice.Click += async (_, _) => await updates.InstallAsync(UpdateComponent.Core);
-        Opened += async (_, _) => await InitializeAsync();
+        Opened += InitializeOnFirstOpen;
         Closing += WindowClosing;
+        PropertyChanged += (_, change) =>
+        {
+            if (change.Property == IsVisibleProperty || change.Property == WindowStateProperty) RefreshLogVisibility();
+        };
         if (skipBackend) InitUI();
     }
 
-    private void BuildContent()
+    private async void InitializeOnFirstOpen(object? sender, EventArgs args)
     {
-        StackPanel fields = new() { Spacing = 9, Margin = new Thickness(20, 16) };
-        fields.Children.Add(Row("模式", modeComboBox));
-        fields.Children.Add(Row("网卡", macComboBox));
-        Grid accountRow = new() { ColumnDefinitions = new ColumnDefinitions("*,Auto"), ColumnSpacing = 7 };
-        accountRow.Children.Add(nameComboBox);
-        Grid.SetColumn(deleteButton, 1);
-        accountRow.Children.Add(deleteButton);
-        fields.Children.Add(Row("账号", accountRow));
-        fields.Children.Add(Row("密码", passwordTextBox));
-        fields.Children.Add(Row("", rememberCheckBox));
-        fields.Children.Add(Row("本机 IP（可选）", ipTextBox));
-        portalPanel.Children.Add(new TextBlock { Text = "校园网页登录", FontWeight = FontWeight.SemiBold });
-        portalPanel.Children.Add(Row("登录页地址", portalBaseTextBox));
-        StackPanel advancedPortal = new() { Spacing = 7 };
-        advancedPortal.Children.Add(Row("API 地址", portalApiTextBox));
-        advancedPortal.Children.Add(Row("AC IPv4", portalAcIpTextBox));
-        advancedPortal.Children.Add(Row("载荷 IPv4", portalClientIpTextBox));
-        portalPanel.Children.Add(new Expander
-        {
-            Name = "advancedPortalExpander", Header = "更多网页设置（通常留空）",
-            Content = advancedPortal, HorizontalAlignment = HorizontalAlignment.Stretch
-        });
-        portalPanel.Children.Add(allowHttpCheckBox);
-        portalPanel.Children.Add(new TextBlock
-        {
-            Text = "先在浏览器中打开校园登录页，再填写该页地址。HTTPS 可加密传输；学校提供 HTTP 登录页时，勾选上面的选项后连接，账号密码会以明文传输。",
-            TextWrapping = TextWrapping.Wrap
-        });
-        fields.Children.Add(portalPanel);
-        StackPanel preferences = new() { Spacing = 3 };
-        preferences.Children.Add(autoCheckBox);
-        preferences.Children.Add(startupCheckBox);
-        Grid controls = new() { ColumnDefinitions = new ColumnDefinitions("*,Auto"), Margin = new Thickness(0, 5) };
-        controls.Children.Add(preferences);
-        Grid.SetColumn(loginButton, 1);
-        controls.Children.Add(loginButton);
-        fields.Children.Add(controls);
-        updatePanel.Children.Add(guiUpdateNotice);
-        updatePanel.Children.Add(coreUpdateNotice);
-        updatePanel.Children.Add(updateProgress);
-        fields.Children.Add(updatePanel);
-        fields.Children.Add(new Border { Child = label, Padding = new Thickness(9), BorderThickness = new Thickness(1), BorderBrush = Brushes.Gray, CornerRadius = new CornerRadius(4) });
-        StackPanel tools = new() { Orientation = Orientation.Horizontal, Spacing = 8 };
-        tools.Children.Add(doctorButton);
-        Button export = new() { Name = "exportButton", Content = "导出诊断" };
-        export.Click += async (_, _) => await ExportAsync();
-        tools.Children.Add(export);
-        fields.Children.Add(tools);
-        StackPanel updateTools = new() { Orientation = Orientation.Horizontal, Spacing = 8 };
-        updateTools.Children.Add(checkUpdateButton);
-        updateTools.Children.Add(checkCoreUpdateButton);
-        fields.Children.Add(updateTools);
-        fields.Children.Add(logTextBox);
-        Content = new ScrollViewer { Content = fields, HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled };
-    }
-
-    private static Grid Row(string caption, Control input)
-    {
-        Grid grid = new() { ColumnDefinitions = new ColumnDefinitions("110,*"), ColumnSpacing = 8 };
-        grid.Children.Add(new TextBlock { Text = caption, VerticalAlignment = VerticalAlignment.Center });
-        Grid.SetColumn(input, 1);
-        grid.Children.Add(input);
-        return grid;
+        Opened -= InitializeOnFirstOpen;
+        await InitializeAsync();
     }
 
     private async Task InitializeAsync()
@@ -199,7 +151,6 @@ public sealed partial class MainWindow : Window
         loginButton.IsEnabled = false;
         try
         {
-            if (Screens.Primary is { } screen) MaxHeight = Math.Max(420, screen.WorkingArea.Height / screen.Scaling - 35);
             try { config = store.Load(); }
             catch (Exception error)
             {
@@ -211,18 +162,20 @@ public sealed partial class MainWindow : Window
             InitUI();
             if (store.LoadWarning is { } warning) await MessageAsync(warning, "旧账号文件需要清理");
             InitTray();
-            coreVersion = await core.VerifyCoreAsync(lifetime.Token);
-            RefreshUpdateUI();
-            label.Text = "准备好了。选择网络，填写账号和密码，然后点击“连接”。";
-            loginButton.IsEnabled = true;
-            if (current is { Password.Length: > 0 } && config.Auto) await StartCoreAsync();
+            if (current is { Password.Length: > 0 } && config.Auto)
+                await StartCoreAsync(waitForEnvironment: true);
+            else
+            {
+                await PrepareCoreAsync(waitForEnvironment: true, captureOptions: null, lifetime.Token);
+                label.Text = "填写校园账号，连接校园网络。";
+            }
         }
         catch (OperationCanceledException) when (lifetime.IsCancellationRequested) { }
         catch (Exception error)
         {
-            label.Text = error.Message;
-            if (!closing) await MessageAsync(error.Message + "\n配置路径：" + store.FilePath, "初始化失败");
+            ReportConnectionFailure("准备连接失败，可点击“连接”重新检查，或打开诊断查看原因。", error.Message);
         }
+        finally { if (!closing) loginButton.IsEnabled = true; }
     }
 
     private void InitUI()
@@ -266,7 +219,7 @@ public sealed partial class MainWindow : Window
         NativeMenuItem stop = new("断开连接");
         stop.Click += async (_, _) => await StopCoreAsync();
         NativeMenuItem exit = new("退出");
-        exit.Click += (_, _) => Close();
+        exit.Click += (_, _) => RequestExit();
         menu.Items.Add(open);
         menu.Items.Add(stop);
         menu.Items.Add(exit);
@@ -275,11 +228,12 @@ public sealed partial class MainWindow : Window
         TrayIcon.SetIcons(Application.Current!, new TrayIcons { tray });
         // Linux desktops can omit the status-notifier host while still exposing
         // a tray implementation. Keep the normal window reachable there.
-        canHideToTray = !OperatingSystem.IsLinux() && tray.NativeMenuExporter is not null;
+        CanHideToTray = !OperatingSystem.IsLinux() && tray.NativeMenuExporter is not null;
     }
 
     private void ShowAndActivate()
     {
+        hiddenByUser = false;
         Show();
         WindowState = WindowState.Normal;
         Activate();
@@ -386,9 +340,9 @@ public sealed partial class MainWindow : Window
         ToolTip.SetTip(ipTextBox, valid ? null : "请输入 IPv4 地址，不指定时留空。");
     }
 
-    private async Task StartCoreAsync()
+    private async Task StartCoreAsync(bool waitForEnvironment = false)
     {
-        if (skipBackend || sessionTask is not null || closing || installingUpdate) return;
+        if (skipBackend || preparingCore || sessionTask is not null || closing || installingUpdate) return;
         string username = (nameComboBox.Text ?? "").Trim();
         string password = passwordTextBox.Text ?? "";
         string ip = (ipTextBox.Text ?? "").Trim();
@@ -402,6 +356,7 @@ public sealed partial class MainWindow : Window
         authenticated = false;
         authentication = CancellationTokenSource.CreateLinkedTokenSource(lifetime.Token);
         SetUIEnabled(false);
+        loginButton.IsEnabled = true;
         label.Text = config.Mode == "portal" ? "正在登录校园网页…" : "正在连接校园网…";
         var options = new CoreLaunchOptions(username, password, config.Mac, ip,
             Path.Combine(Path.GetDirectoryName(store.FilePath)!, "core.yml"), config.NoUdp,
@@ -409,13 +364,13 @@ public sealed partial class MainWindow : Window
         int generation = ++sessionGeneration;
         try
         {
-            sessionTask = core.RunAsync(options, ReceiveLine, ReceiveLine, authentication.Token,
-                state => ReceiveStatus(state, options.Mode, options.NoUdp, generation));
+            sessionTask = RunPreparedCoreAsync(options, waitForEnvironment, generation, authentication.Token);
             int code = await sessionTask;
-            label.Text = $"核心程序已退出（代码 {code}）。可使用“环境自检”查看环境。";
+            if (code == 0) label.Text = "连接已结束，可重新连接。";
+            else ReportConnectionFailure("连接失败，请检查网络或查看诊断。", $"认证程序已退出（代码 {code}）。");
         }
         catch (OperationCanceledException) when (authentication.IsCancellationRequested) { label.Text = "已停止。"; }
-        catch (Exception error) { label.Text = error.Message; ShowAndActivate(); }
+        catch (Exception error) { ReportConnectionFailure("连接失败，可点击“连接”重试或查看诊断。", error.Message); if (!hiddenByUser && !closing) ShowAndActivate(); }
         finally
         {
             sessionTask = null;
@@ -426,21 +381,68 @@ public sealed partial class MainWindow : Window
         }
     }
 
+    private async Task<int> RunPreparedCoreAsync(CoreLaunchOptions options, bool waitForEnvironment,
+        int generation, CancellationToken cancellationToken)
+    {
+        await PrepareCoreAsync(waitForEnvironment, waitForEnvironment && options.Mode == "eap" ? options : null, cancellationToken);
+        cancellationToken.ThrowIfCancellationRequested();
+        label.Text = options.Mode == "portal" ? "正在登录校园网页…" : "正在连接校园网…";
+        return await core.RunAsync(options, ReceiveLine, ReceiveLine, cancellationToken,
+            state => ReceiveStatus(state, options.Mode, options.NoUdp, generation));
+    }
+
+    private async Task PrepareCoreAsync(bool waitForEnvironment, CoreLaunchOptions? captureOptions, CancellationToken cancellationToken)
+    {
+        preparingCore = true;
+        label.Text = "正在检查连接环境…";
+        try
+        {
+            await StartupRecovery.RunAsync(async token =>
+            {
+                coreVersion = await core.VerifyCoreAsync(token);
+                if (captureOptions is not null)
+                {
+                    CoreDoctorReport report = await core.DoctorAsync(token, captureOptions);
+                    if (!report.PrerequisitesMet) throw new CoreProbeException(report.Report);
+                }
+            }, (error, attempt) =>
+            {
+                diagnostics.Add(error.Message, nameComboBox.Text ?? "", passwordTextBox.Text ?? "");
+                logTextBox.Text = diagnostics.Export();
+                label.Text = $"连接环境尚未就绪，5 秒后自动重试（{attempt}/12）…";
+            }, cancellationToken, attempts: waitForEnvironment ? 13 : 1);
+            RefreshUpdateUI();
+        }
+        finally { preparingCore = false; }
+    }
+
     internal void ReceiveLine(string line)
     {
         // CoreProcessSession has already hidden both credentials together,
         // before any line reaches the UI or the retained diagnostics buffer.
         diagnostics.Add(line);
+        if (Volatile.Read(ref logDisplayActive) == 0) return;
         if (Interlocked.Exchange(ref logRefreshPending, 1) != 0) return;
         Dispatcher.UIThread.Post(() =>
         {
             Interlocked.Exchange(ref logRefreshPending, 0);
             // A failed child can exit before this queued refresh runs. Its
             // final diagnostics remain useful after the session has ended.
-            if (closing) return;
+            if (closing || Volatile.Read(ref logDisplayActive) == 0) return;
             logTextBox.Text = diagnostics.Export();
             logTextBox.CaretIndex = logTextBox.Text.Length;
         });
+    }
+
+    private void RefreshLogVisibility()
+    {
+        bool active = IsVisible && WindowState != WindowState.Minimized && extraPanel.IsVisible && diagnosticsView.IsVisible && !closing;
+        Volatile.Write(ref logDisplayActive, active ? 1 : 0);
+        if (active)
+        {
+            logTextBox.Text = diagnostics.Export();
+            logTextBox.CaretIndex = logTextBox.Text.Length;
+        }
     }
 
     private void ReceiveStatus(CoreConnectionStatus state, string mode, bool eapOnly, int generation) => Dispatcher.UIThread.Post(() =>
@@ -459,7 +461,7 @@ public sealed partial class MainWindow : Window
             if (!authenticated)
             {
                 authenticated = true;
-                if (canHideToTray) Hide();
+                if (CanHideToTray) Hide();
             }
         }
         else
@@ -472,7 +474,7 @@ public sealed partial class MainWindow : Window
                 CoreConnectionPhase.PortalAuthentication => "正在登录校园网页…",
                 _ => "连接中断，正在自动重连…"
             };
-            if (authenticated) { authenticated = false; ShowAndActivate(); }
+            if (authenticated) { authenticated = false; if (!hiddenByUser) ShowAndActivate(); }
         }
     }
 
@@ -526,7 +528,7 @@ public sealed partial class MainWindow : Window
     {
         if (component == UpdateComponent.Gui)
         {
-            Close();
+            RequestExit();
             return;
         }
         try
@@ -548,7 +550,8 @@ public sealed partial class MainWindow : Window
     private void RefreshUpdateUI()
     {
         if (closing) return;
-        Title = $"drcom4scutGUI {GuiVersion}" + (coreVersion.Length == 0 ? "" : $" — {coreVersion}");
+        Title = "校园连接";
+        versionDetails.Text = $"界面 {GuiVersion}  ·  " + (coreVersion.Length == 0 ? "认证程序待检查" : coreVersion);
         bool guiAvailable = updates.Offers.TryGetValue(UpdateComponent.Gui, out UpdateOffer? guiOffer);
         bool coreAvailable = updates.Offers.TryGetValue(UpdateComponent.Core, out UpdateOffer? coreOffer);
         guiUpdateNotice.IsVisible = guiAvailable;
@@ -581,7 +584,7 @@ public sealed partial class MainWindow : Window
         }
     }
 
-    private void SetUIEnabled(bool enabled)
+    internal void SetUIEnabled(bool enabled)
     {
         loginButton.Content = enabled ? "连接" : "断开";
         macComboBox.IsEnabled = enabled;
@@ -591,8 +594,17 @@ public sealed partial class MainWindow : Window
         ipTextBox.IsEnabled = enabled;
         autoCheckBox.IsEnabled = enabled;
         modeComboBox.IsEnabled = enabled;
+        wiredModeButton.IsEnabled = enabled;
+        wirelessModeButton.IsEnabled = enabled;
         portalPanel.IsEnabled = enabled;
         deleteButton.IsEnabled = enabled && current is not null;
+    }
+
+    internal void ReportConnectionFailure(string summary, string details)
+    {
+        diagnostics.Add(details, nameComboBox.Text ?? "", passwordTextBox.Text ?? "");
+        logTextBox.Text = diagnostics.Export();
+        label.Text = summary;
     }
 
     private async Task DoctorAsync()
@@ -633,7 +645,15 @@ public sealed partial class MainWindow : Window
         catch (Exception error) { await MessageAsync(error.Message, "导出失败"); }
     }
 
-    private void UpdateModeUI() => portalPanel.IsVisible = (modeComboBox.SelectedItem as Choice)?.Value == "portal";
+    private void UpdateModeUI()
+    {
+        bool portal = (modeComboBox.SelectedItem as Choice)?.Value == "portal";
+        portalPanel.IsVisible = portal;
+        advancedPortalSettings.IsVisible = portal;
+        wiredModeButton.IsChecked = !portal;
+        wirelessModeButton.IsChecked = portal;
+        UpdateCompactLayout();
+    }
 
     private void SavePreferences()
     {
@@ -653,17 +673,30 @@ public sealed partial class MainWindow : Window
         }
     }
 
-    private async Task MessageAsync(string message, string title) => await DialogAsync(message, title, confirm: false);
+    internal async Task MessageAsync(string message, string title) => await DialogAsync(message, title, confirm: false);
     private Task<bool> ConfirmAsync(string message, string title) => DialogAsync(message, title, confirm: true);
 
     private async Task<bool> DialogAsync(string message, string title, bool confirm)
     {
         if (closing || !IsVisible) { label.Text = message; return false; }
-        Window dialog = new() { Title = title, Width = 450, SizeToContent = SizeToContent.Height, CanResize = false, WindowStartupLocation = WindowStartupLocation.CenterOwner };
-        StackPanel content = new() { Spacing = 15, Margin = new Thickness(20) };
-        content.Children.Add(new TextBlock { Text = message, TextWrapping = TextWrapping.Wrap });
+        Screen? screen = Screens.ScreenFromWindow(this) ?? Screens.Primary;
+        double maxHeight = screen is null ? 560 : Math.Min(560, screen.WorkingArea.Height / screen.Scaling - 48);
+        double width = screen is null ? 450 : Math.Min(450, screen.WorkingArea.Width / screen.Scaling - 24);
+        Window dialog = new()
+        {
+            Title = title, Width = width, MaxHeight = maxHeight, SizeToContent = SizeToContent.Height,
+            CanResize = false, WindowStartupLocation = WindowStartupLocation.CenterOwner
+        };
+        Grid content = new() { RowDefinitions = new RowDefinitions("*,Auto"), RowSpacing = 15, Margin = new Thickness(20) };
+        content.Children.Add(new ScrollViewer
+        {
+            MaxHeight = Math.Max(32, maxHeight - 100),
+            HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
+            VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+            Content = new TextBlock { Text = message, TextWrapping = TextWrapping.Wrap }
+        });
         StackPanel actions = new() { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right, Spacing = 8 };
-        Button ok = new() { Content = confirm ? "确定" : "关闭", IsDefault = true };
+        Button ok = new() { Content = confirm ? "确定" : "关闭", IsDefault = true, IsCancel = !confirm };
         ok.Click += (_, _) => dialog.Close(true);
         actions.Children.Add(ok);
         if (confirm)
@@ -672,6 +705,7 @@ public sealed partial class MainWindow : Window
             cancel.Click += (_, _) => dialog.Close(false);
             actions.Children.Add(cancel);
         }
+        Grid.SetRow(actions, 1);
         content.Children.Add(actions);
         dialog.Content = content;
         return await dialog.ShowDialog<bool>(this);
@@ -680,6 +714,14 @@ public sealed partial class MainWindow : Window
     private async void WindowClosing(object? sender, WindowClosingEventArgs e)
     {
         if (closeAllowed) return;
+        if (!exitRequested && e.CloseReason is WindowCloseReason.WindowClosing or WindowCloseReason.Undefined && (!skipBackend || CanHideToTray))
+        {
+            e.Cancel = true;
+            hiddenByUser = true;
+            if (CanHideToTray) Hide();
+            else WindowState = WindowState.Minimized;
+            return;
+        }
         if (skipBackend) { updates.Dispose(); lifetime.Cancel(); return; }
         e.Cancel = true;
         if (closing) return;
@@ -690,6 +732,12 @@ public sealed partial class MainWindow : Window
         tray?.Dispose();
         lifetime.Dispose();
         closeAllowed = true;
+        Close();
+    }
+
+    internal void RequestExit()
+    {
+        exitRequested = true;
         Close();
     }
 
