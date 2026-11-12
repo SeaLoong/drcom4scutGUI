@@ -31,6 +31,31 @@ public sealed class MainWindowTests
     }
 
     [Fact]
+    public Task ClosingToTrayPreservesStatusAndDoesNotReopenOnRecovery() => OnUi(() =>
+    {
+        MainWindow window = new(skipBackend: true) { CanHideToTray = true };
+        bool closed = false;
+        window.Closed += (_, _) => closed = true;
+        window.Show();
+        try
+        {
+            window.ApplyConnectionStatus(new(CoreConnectionPhase.Online), "eap", false);
+            window.Show();
+            window.Close();
+            Assert.False(closed);
+            Assert.False(window.IsVisible);
+            Assert.Equal("已连接校园网", Find<TextBlock>(window, "statusHeading").Text);
+            window.ApplyConnectionStatus(new(CoreConnectionPhase.WaitingInterface), "eap", false);
+            Assert.False(window.IsVisible);
+            window.Show();
+            Assert.True(window.IsVisible);
+            window.RequestExit();
+            Assert.True(closed);
+        }
+        finally { if (!closed) window.RequestExit(); }
+    });
+
+    [Fact]
     public Task ReopeningWindowKeepsTheOnlineStatus() => OnUi(() =>
     {
         MainWindow window = new(skipBackend: true);

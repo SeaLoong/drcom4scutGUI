@@ -93,6 +93,22 @@ public sealed class CoreProcessSessionTests
     }
 
     [Fact]
+    public async Task StartupCaptureCheckUsesSelectedAdapterWithoutCredentials()
+    {
+        string fixture = Path.Combine(Path.GetDirectoryName(Helper)!, "DoctorSelection" + Guid.NewGuid().ToString("N") + (OperatingSystem.IsWindows() ? ".exe" : ""));
+        File.Copy(Helper, fixture);
+        try
+        {
+            CoreDoctorReport report = await new CoreProcessSession(fixture).DoctorAsync(TestContext.Current.CancellationToken,
+                new("synthetic-user", "synthetic-secret", "02:00:00:00:00:01", "192.0.2.10", "private-config.yml"));
+            Assert.True(report.PrerequisitesMet);
+            string[] arguments = Assert.IsType<string[]>(JsonSerializer.Deserialize<string[]>(report.Report));
+            Assert.Equal(["--doctor", "--mac", "02:00:00:00:00:01", "--ip", "192.0.2.10"], arguments);
+        }
+        finally { File.Delete(fixture); }
+    }
+
+    [Fact]
     public async Task UnmetPrerequisitesPreserveBothDiagnosticStreams()
     {
         string fixture = Path.Combine(Path.GetDirectoryName(Helper)!, "DoctorUnavailable" + Guid.NewGuid().ToString("N") + (OperatingSystem.IsWindows() ? ".exe" : ""));
@@ -114,10 +130,29 @@ public sealed class CoreProcessSessionTests
         File.Copy(Helper, fixture);
         try
         {
-            var error = await Assert.ThrowsAsync<InvalidOperationException>(() => new CoreProcessSession(fixture).DoctorAsync(TestContext.Current.CancellationToken));
+            var error = await Assert.ThrowsAsync<CoreProbeException>(() => new CoreProcessSession(fixture).DoctorAsync(TestContext.Current.CancellationToken));
             Assert.Contains("unexpected diagnostic failure", error.Message);
+            Assert.Contains("0x00000007", error.Message);
         }
         finally { File.Delete(fixture); }
+    }
+
+    [Fact]
+    public async Task StartupProbePreservesExitCodeAndBothStreamsAndCanBeRetried()
+    {
+        string fixture = Path.Combine(Path.GetDirectoryName(Helper)!, "StartupFailure" + Guid.NewGuid().ToString("N") + (OperatingSystem.IsWindows() ? ".exe" : ""));
+        File.Copy(Helper, fixture);
+        try
+        {
+            var session = new CoreProcessSession(fixture);
+            var error = await Assert.ThrowsAsync<CoreProbeException>(() => session.VerifyCoreAsync(TestContext.Current.CancellationToken));
+            Assert.Contains("--help", error.Message);
+            Assert.Contains("0x00000007", error.Message);
+            Assert.Contains("startup-output", error.Message);
+            Assert.Contains("startup-error", error.Message);
+            Assert.Equal("drcom4scut 0.5.0", await session.VerifyCoreAsync(TestContext.Current.CancellationToken));
+        }
+        finally { File.Delete(fixture); File.Delete(fixture + ".ready"); }
     }
 
     [Fact]
@@ -535,7 +570,7 @@ public sealed class CoreProcessSessionTests
     {
         using var directory = new TemporaryDirectory();
         string secret = "synthetic-do-not-echo";
-        Exception error = await Assert.ThrowsAsync<InvalidOperationException>(() => new CoreProcessSession(directory.File("missing-core")).RunAsync(new CoreLaunchOptions("student", secret), _ => { }, _ => { }, TestContext.Current.CancellationToken));
+        Exception error = await Assert.ThrowsAsync<CoreProbeException>(() => new CoreProcessSession(directory.File("missing-core")).RunAsync(new CoreLaunchOptions("student", secret), _ => { }, _ => { }, TestContext.Current.CancellationToken));
         Assert.DoesNotContain(secret, error.ToString());
     }
 }

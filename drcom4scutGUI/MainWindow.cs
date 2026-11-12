@@ -37,8 +37,11 @@ public sealed partial class MainWindow : Window
     private bool loading;
     private bool closing;
     private bool closeAllowed;
+    private bool exitRequested;
+    private bool preparingCore;
+    private bool hiddenByUser;
     private bool authenticated;
-    private bool canHideToTray;
+    internal bool CanHideToTray { get; set; }
     private int sessionGeneration;
     private string coreVersion = "";
     private int logRefreshPending;
@@ -151,17 +154,20 @@ public sealed partial class MainWindow : Window
             InitUI();
             if (store.LoadWarning is { } warning) await MessageAsync(warning, "旧账号文件需要清理");
             InitTray();
-            coreVersion = await core.VerifyCoreAsync(lifetime.Token);
-            RefreshUpdateUI();
-            label.Text = "填写校园账号，连接校园网络。";
-            loginButton.IsEnabled = true;
-            if (current is { Password.Length: > 0 } && config.Auto) await StartCoreAsync();
+            if (current is { Password.Length: > 0 } && config.Auto)
+                await StartCoreAsync(waitForEnvironment: true);
+            else
+            {
+                await PrepareCoreAsync(waitForEnvironment: true, captureOptions: null, lifetime.Token);
+                label.Text = "填写校园账号，连接校园网络。";
+            }
         }
         catch (OperationCanceledException) when (lifetime.IsCancellationRequested) { }
         catch (Exception error)
         {
-            ReportConnectionFailure("准备连接失败，请打开诊断检查环境。", error.Message);
+            ReportConnectionFailure("准备连接失败，可点击“连接”重新检查，或打开诊断查看原因。", error.Message);
         }
+        finally { if (!closing) loginButton.IsEnabled = true; }
     }
 
     private void InitUI()
@@ -205,7 +211,7 @@ public sealed partial class MainWindow : Window
         NativeMenuItem stop = new("断开连接");
         stop.Click += async (_, _) => await StopCoreAsync();
         NativeMenuItem exit = new("退出");
-        exit.Click += (_, _) => Close();
+        exit.Click += (_, _) => RequestExit();
         menu.Items.Add(open);
         menu.Items.Add(stop);
         menu.Items.Add(exit);
@@ -214,11 +220,12 @@ public sealed partial class MainWindow : Window
         TrayIcon.SetIcons(Application.Current!, new TrayIcons { tray });
         // Linux desktops can omit the status-notifier host while still exposing
         // a tray implementation. Keep the normal window reachable there.
-        canHideToTray = !OperatingSystem.IsLinux() && tray.NativeMenuExporter is not null;
+        CanHideToTray = !OperatingSystem.IsLinux() && tray.NativeMenuExporter is not null;
     }
 
     private void ShowAndActivate()
     {
+        hiddenByUser = false;
         Show();
         WindowState = WindowState.Normal;
         Activate();
@@ -325,9 +332,9 @@ public sealed partial class MainWindow : Window
         ToolTip.SetTip(ipTextBox, valid ? null : "请输入 IPv4 地址，不指定时留空。");
     }
 
-    private async Task StartCoreAsync()
+    private async Task StartCoreAsync(bool waitForEnvironment = false)
     {
-        if (skipBackend || sessionTask is not null || closing || installingUpdate) return;
+        if (skipBackend || preparingCore || sessionTask is not null || closing || installingUpdate) return;
         string username = (nameComboBox.Text ?? "").Trim();
         string password = passwordTextBox.Text ?? "";
         string ip = (ipTextBox.Text ?? "").Trim();
@@ -341,6 +348,7 @@ public sealed partial class MainWindow : Window
         authenticated = false;
         authentication = CancellationTokenSource.CreateLinkedTokenSource(lifetime.Token);
         SetUIEnabled(false);
+        loginButton.IsEnabled = true;
         label.Text = config.Mode == "portal" ? "正在登录校园网页…" : "正在连接校园网…";
         var options = new CoreLaunchOptions(username, password, config.Mac, ip,
             Path.Combine(Path.GetDirectoryName(store.FilePath)!, "core.yml"), config.NoUdp,
@@ -348,14 +356,13 @@ public sealed partial class MainWindow : Window
         int generation = ++sessionGeneration;
         try
         {
-            sessionTask = core.RunAsync(options, ReceiveLine, ReceiveLine, authentication.Token,
-                state => ReceiveStatus(state, options.Mode, options.NoUdp, generation));
+            sessionTask = RunPreparedCoreAsync(options, waitForEnvironment, generation, authentication.Token);
             int code = await sessionTask;
             if (code == 0) label.Text = "连接已结束，可重新连接。";
             else ReportConnectionFailure("连接失败，请检查网络或查看诊断。", $"认证程序已退出（代码 {code}）。");
         }
         catch (OperationCanceledException) when (authentication.IsCancellationRequested) { label.Text = "已停止。"; }
-        catch (Exception error) { ReportConnectionFailure("连接失败，请检查网络或查看诊断。", error.Message); ShowAndActivate(); }
+        catch (Exception error) { ReportConnectionFailure("连接失败，可点击“连接”重试或查看诊断。", error.Message); if (!hiddenByUser && !closing) ShowAndActivate(); }
         finally
         {
             sessionTask = null;
@@ -364,6 +371,41 @@ public sealed partial class MainWindow : Window
             authenticated = false;
             if (!closing && !installingUpdate) SetUIEnabled(true);
         }
+    }
+
+    private async Task<int> RunPreparedCoreAsync(CoreLaunchOptions options, bool waitForEnvironment,
+        int generation, CancellationToken cancellationToken)
+    {
+        await PrepareCoreAsync(waitForEnvironment, waitForEnvironment && options.Mode == "eap" ? options : null, cancellationToken);
+        cancellationToken.ThrowIfCancellationRequested();
+        label.Text = options.Mode == "portal" ? "正在登录校园网页…" : "正在连接校园网…";
+        return await core.RunAsync(options, ReceiveLine, ReceiveLine, cancellationToken,
+            state => ReceiveStatus(state, options.Mode, options.NoUdp, generation));
+    }
+
+    private async Task PrepareCoreAsync(bool waitForEnvironment, CoreLaunchOptions? captureOptions, CancellationToken cancellationToken)
+    {
+        preparingCore = true;
+        label.Text = "正在检查连接环境…";
+        try
+        {
+            await StartupRecovery.RunAsync(async token =>
+            {
+                coreVersion = await core.VerifyCoreAsync(token);
+                if (captureOptions is not null)
+                {
+                    CoreDoctorReport report = await core.DoctorAsync(token, captureOptions);
+                    if (!report.PrerequisitesMet) throw new CoreProbeException(report.Report);
+                }
+            }, (error, attempt) =>
+            {
+                diagnostics.Add(error.Message, nameComboBox.Text ?? "", passwordTextBox.Text ?? "");
+                logTextBox.Text = diagnostics.Export();
+                label.Text = $"连接环境尚未就绪，5 秒后自动重试（{attempt}/12）…";
+            }, cancellationToken, attempts: waitForEnvironment ? 13 : 1);
+            RefreshUpdateUI();
+        }
+        finally { preparingCore = false; }
     }
 
     internal void ReceiveLine(string line)
@@ -399,7 +441,7 @@ public sealed partial class MainWindow : Window
             if (!authenticated)
             {
                 authenticated = true;
-                if (canHideToTray) Hide();
+                if (CanHideToTray) Hide();
             }
         }
         else
@@ -412,7 +454,7 @@ public sealed partial class MainWindow : Window
                 CoreConnectionPhase.PortalAuthentication => "正在登录校园网页…",
                 _ => "连接中断，正在自动重连…"
             };
-            if (authenticated) { authenticated = false; ShowAndActivate(); }
+            if (authenticated) { authenticated = false; if (!hiddenByUser) ShowAndActivate(); }
         }
     }
 
@@ -466,7 +508,7 @@ public sealed partial class MainWindow : Window
     {
         if (component == UpdateComponent.Gui)
         {
-            Close();
+            RequestExit();
             return;
         }
         try
@@ -651,6 +693,14 @@ public sealed partial class MainWindow : Window
     private async void WindowClosing(object? sender, WindowClosingEventArgs e)
     {
         if (closeAllowed) return;
+        if (!exitRequested && e.CloseReason is WindowCloseReason.WindowClosing or WindowCloseReason.Undefined && (!skipBackend || CanHideToTray))
+        {
+            e.Cancel = true;
+            hiddenByUser = true;
+            if (CanHideToTray) Hide();
+            else WindowState = WindowState.Minimized;
+            return;
+        }
         if (skipBackend) { updates.Dispose(); lifetime.Cancel(); return; }
         e.Cancel = true;
         if (closing) return;
@@ -661,6 +711,12 @@ public sealed partial class MainWindow : Window
         tray?.Dispose();
         lifetime.Dispose();
         closeAllowed = true;
+        Close();
+    }
+
+    internal void RequestExit()
+    {
+        exitRequested = true;
         Close();
     }
 

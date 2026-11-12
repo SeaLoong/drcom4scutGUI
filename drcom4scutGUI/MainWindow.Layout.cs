@@ -194,6 +194,11 @@ public sealed partial class MainWindow
             item.Click += (_, _) => { flyout.Hide(); ShowExtraView(view); };
             menu.Children.Add(item);
         }
+        Button exit = new() { Name = "exitMenuButton", Content = "退出程序并断开连接", HorizontalAlignment = HorizontalAlignment.Stretch,
+            HorizontalContentAlignment = HorizontalAlignment.Left, Padding = new Thickness(11, 10) };
+        exit.Classes.Add("quiet");
+        exit.Click += (_, _) => { flyout.Hide(); RequestExit(); };
+        menu.Children.Add(exit);
         moreButton.Flyout = flyout;
     }
 
