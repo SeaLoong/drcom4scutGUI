@@ -173,16 +173,16 @@ public sealed class MainWindowTests
         try
         {
             TextBlock heading = Find<TextBlock>(window, "statusHeading");
-            ProgressBar progress = Find<ProgressBar>(window, "connectionProgress");
+            TextBlock caption = Find<TextBlock>(window, "statusCaption");
             window.ApplyConnectionStatus(new(CoreConnectionPhase.UdpAuthentication), "eap", false);
             Assert.Equal("正在连接校园网", heading.Text);
-            Assert.True(progress.IsVisible);
+            Assert.Equal("连接中", caption.Text);
             window.ApplyConnectionStatus(new(CoreConnectionPhase.Online), "eap", false);
             Assert.Equal("已连接校园网", heading.Text);
-            Assert.False(progress.IsVisible);
+            Assert.Equal("连接已建立", caption.Text);
             window.ApplyConnectionStatus(new(CoreConnectionPhase.Offline), "eap", false);
             Assert.Equal("正在恢复连接", heading.Text);
-            Assert.True(progress.IsVisible);
+            Assert.Equal("自动重试中", caption.Text);
             Assert.False(Find<Border>(window, "extraPanel").IsVisible);
         }
         finally { window.Close(); }
@@ -395,10 +395,36 @@ public sealed class MainWindowTests
             window.ReceiveLine("连接失败：请检查网线。");
             Dispatcher.UIThread.RunJobs();
             TextBox log = Find<TextBox>(window, "logTextBox");
+            Assert.True(string.IsNullOrEmpty(log.Text));
+            window.ShowExtraView("diagnostics");
             Assert.EndsWith("连接失败：请检查网线。", log.Text);
             Assert.Contains("diagnostic-999", log.Text);
             Assert.Equal(200, log.Text!.Split(Environment.NewLine).Length);
             Assert.Equal(previousStatus, status.Text);
+        }
+        finally { window.Close(); }
+    });
+
+    [Fact]
+    public Task HiddenDiagnosticsKeepBufferingAndCatchUpWhenReopened() => OnUi(() =>
+    {
+        MainWindow window = new(skipBackend: true);
+        window.Show();
+        try
+        {
+            window.ShowExtraView("diagnostics");
+            window.ReceiveLine("before-hide");
+            Dispatcher.UIThread.RunJobs();
+            TextBox log = Find<TextBox>(window, "logTextBox");
+            Assert.Contains("before-hide", log.Text);
+            window.Hide();
+            for (int i = 0; i < 1000; i++) window.ReceiveLine("background-" + i);
+            Dispatcher.UIThread.RunJobs();
+            Assert.Equal("before-hide", log.Text);
+            window.Show();
+            Dispatcher.UIThread.RunJobs();
+            Assert.EndsWith("background-999", log.Text);
+            Assert.Equal(200, log.Text!.Split(Environment.NewLine).Length);
         }
         finally { window.Close(); }
     });

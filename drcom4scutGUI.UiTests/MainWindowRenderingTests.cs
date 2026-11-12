@@ -5,6 +5,7 @@ using Avalonia.LogicalTree;
 using Avalonia.Media.Imaging;
 using Avalonia.Media;
 using Avalonia.Threading;
+using Avalonia.Styling;
 using Xunit;
 
 namespace drcom4scutGUI.UiTests;
@@ -21,11 +22,20 @@ public sealed class MainWindowRenderingTests
     [InlineData("settings")]
     [InlineData("diagnostics")]
     [InlineData("compact")]
+    [InlineData("dark-idle")]
+    [InlineData("dark-online")]
+    [InlineData("dark-settings")]
+    [InlineData("dark-portal")]
+    [InlineData("dark-error")]
+    [InlineData("dark-compact")]
     public async Task NativeControlsRenderWithoutHorizontalOverflowAndKeepThePrimaryActionReachable(string scene)
     {
         await using HeadlessUnitTestSession session = HeadlessUnitTestSession.StartNew(typeof(TestAppBuilder));
         await session.Dispatch(() =>
         {
+            string outputScene = scene;
+            bool dark = scene.StartsWith("dark-", StringComparison.Ordinal);
+            if (dark) scene = scene[5..];
             Configuration configuration = new()
             {
                 Accounts = [new Account { Name = "student-demo", RememberPassword = false }],
@@ -34,6 +44,7 @@ public sealed class MainWindowRenderingTests
                 PortalBase = "https://s.scut.edu.cn"
             };
             MainWindow window = new(skipBackend: true, initialConfiguration: configuration);
+            window.RequestedThemeVariant = dark ? ThemeVariant.Dark : ThemeVariant.Light;
             if (scene == "compact") { window.Width = 440; window.Height = 520; }
             window.Show();
             try
@@ -64,7 +75,7 @@ public sealed class MainWindowRenderingTests
                 Button primary = Find<Button>("loginButton");
                 if (scene is not ("settings" or "diagnostics"))
                     Assert.InRange(primary.Bounds.Width, 300, window.ClientSize.Width);
-                if (scene is "idle" or "online" or "reconnecting")
+                if (scene is "idle" or "online" or "reconnecting" or "compact" or "portal")
                 {
                     Point? bottom = primary.TranslatePoint(new Point(0, primary.Bounds.Height), scroll);
                     Assert.NotNull(bottom);
@@ -72,7 +83,7 @@ public sealed class MainWindowRenderingTests
                 }
                 string directory = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "../../../../artifacts/ui-redesign"));
                 Directory.CreateDirectory(directory);
-                frame.Save(Path.Combine(directory, scene + ".png"), PngBitmapEncoderOptions.Default);
+                frame.Save(Path.Combine(directory, outputScene + ".png"), PngBitmapEncoderOptions.Default);
                 if (scene == "idle")
                     File.WriteAllText(Path.Combine(directory, "font.txt"),
                         "Requested: " + window.FontFamily.Name + Environment.NewLine

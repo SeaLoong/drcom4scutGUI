@@ -15,5 +15,6 @@
     <ProjectReference Include="../drcom4scutGUI.Core/drcom4scutGUI.Core.csproj" />
     <AvaloniaResource Include="DrClient.ico" />
     <AvaloniaResource Include="Assets/scut-brand.png" />
+    <AvaloniaResource Include="Assets/campus-courtyard.jpg" />
   </ItemGroup>
 </Project>

@@ -45,6 +45,7 @@ public sealed partial class MainWindow : Window
     private int sessionGeneration;
     private string coreVersion = "";
     private int logRefreshPending;
+    private int logDisplayActive;
     private static string GuiVersion => typeof(MainWindow).Assembly.GetName().Version?.ToString(3) ?? "unknown";
 
     private readonly ComboBox modeComboBox = new() { Name = "modeComboBox", HorizontalAlignment = HorizontalAlignment.Stretch };
@@ -127,6 +128,10 @@ public sealed partial class MainWindow : Window
         coreUpdateNotice.Click += async (_, _) => await updates.InstallAsync(UpdateComponent.Core);
         Opened += InitializeOnFirstOpen;
         Closing += WindowClosing;
+        PropertyChanged += (_, change) =>
+        {
+            if (change.Property == IsVisibleProperty || change.Property == WindowStateProperty) RefreshLogVisibility();
+        };
         if (skipBackend) InitUI();
     }
 
@@ -413,16 +418,28 @@ public sealed partial class MainWindow : Window
         // CoreProcessSession has already hidden both credentials together,
         // before any line reaches the UI or the retained diagnostics buffer.
         diagnostics.Add(line);
+        if (Volatile.Read(ref logDisplayActive) == 0) return;
         if (Interlocked.Exchange(ref logRefreshPending, 1) != 0) return;
         Dispatcher.UIThread.Post(() =>
         {
             Interlocked.Exchange(ref logRefreshPending, 0);
             // A failed child can exit before this queued refresh runs. Its
             // final diagnostics remain useful after the session has ended.
-            if (closing) return;
+            if (closing || Volatile.Read(ref logDisplayActive) == 0) return;
             logTextBox.Text = diagnostics.Export();
             logTextBox.CaretIndex = logTextBox.Text.Length;
         });
+    }
+
+    private void RefreshLogVisibility()
+    {
+        bool active = IsVisible && WindowState != WindowState.Minimized && extraPanel.IsVisible && diagnosticsView.IsVisible && !closing;
+        Volatile.Write(ref logDisplayActive, active ? 1 : 0);
+        if (active)
+        {
+            logTextBox.Text = diagnostics.Export();
+            logTextBox.CaretIndex = logTextBox.Text.Length;
+        }
     }
 
     private void ReceiveStatus(CoreConnectionStatus state, string mode, bool eapOnly, int generation) => Dispatcher.UIThread.Post(() =>
@@ -632,6 +649,7 @@ public sealed partial class MainWindow : Window
         advancedPortalSettings.IsVisible = portal;
         wiredModeButton.IsChecked = !portal;
         wirelessModeButton.IsChecked = portal;
+        UpdateCompactLayout();
     }
 
     private void SavePreferences()
