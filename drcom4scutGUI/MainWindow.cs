@@ -108,6 +108,10 @@ public sealed partial class MainWindow : Window
         Height = 720;
         MinWidth = 440;
         MinHeight = 520;
+        // Fit the initial window to the work area without clamping maximized layout.
+        // On Win32, a clamped layout can overwrite the native restore bounds.
+        if (Screens.Primary is { } screen)
+            Height = Math.Clamp(screen.WorkingArea.Height / screen.Scaling - 35, MinHeight, Height);
         WindowStartupLocation = WindowStartupLocation.CenterScreen;
         using (Stream stream = AssetLoader.Open(new Uri("avares://drcom4scutGUI/DrClient.ico"))) Icon = new WindowIcon(stream);
         BuildContent();
@@ -147,7 +151,6 @@ public sealed partial class MainWindow : Window
         loginButton.IsEnabled = false;
         try
         {
-            if (Screens.Primary is { } screen) MaxHeight = Math.Max(420, screen.WorkingArea.Height / screen.Scaling - 35);
             try { config = store.Load(); }
             catch (Exception error)
             {
