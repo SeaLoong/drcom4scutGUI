@@ -8,9 +8,9 @@
     <Nullable>enable</Nullable>
   </PropertyGroup>
   <ItemGroup>
-    <PackageReference Include="xunit.v3" Version="4.0.2" />
-    <PackageReference Include="Microsoft.Testing.Extensions.TrxReport" Version="2.5.1" />
-    <PackageReference Include="Avalonia.Headless" Version="12.1.4" />
+    <PackageReference Include="xunit.v3" Version="4.0.3" />
+    <PackageReference Include="Microsoft.Testing.Extensions.TrxReport" Version="2.5.3" />
+    <PackageReference Include="Avalonia.Headless" Version="12.1.6" />
     <ProjectReference Include="../drcom4scutGUI/drcom4scutGUI.csproj" />
   </ItemGroup>
 </Project>
