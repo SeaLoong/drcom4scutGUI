@@ -8,8 +8,8 @@
     <Nullable>enable</Nullable>
   </PropertyGroup>
   <ItemGroup>
-    <PackageReference Include="xunit.v3" Version="4.0.2" />
-    <PackageReference Include="Microsoft.Testing.Extensions.TrxReport" Version="2.5.1" />
+    <PackageReference Include="xunit.v3" Version="4.0.3" />
+    <PackageReference Include="Microsoft.Testing.Extensions.TrxReport" Version="2.5.3" />
     <ProjectReference Include="../drcom4scutGUI.Core/drcom4scutGUI.Core.csproj" />
     <ProjectReference Include="FakeCore/FakeCore.csproj" ReferenceOutputAssembly="false" />
     <Compile Remove="FakeCore/**" />
